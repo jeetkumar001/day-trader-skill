@@ -12,6 +12,7 @@ description: >-
   "where's my stop", "set my stop and target", "plan the exit", "when do I get
   out", "stop loss", "what's my R", "risk reward", or right after
   /trader-entry triggers, before /trader-timemachine.
+  Also runs on India's NSE (market IN): rupees, NSE tick sizes.
 argument-hint: "[--stop or-mid|or-low|price:X|pct:X|atr:K] [--target 2R|1R|price:X]"
 ---
 
@@ -91,9 +92,9 @@ each year and is not in the calendar.
   positions around 15:15 to 15:20 on their own. The plan carries
   `"market": "IN"`, `"currency": "INR"` and `"tick"`.
 
-trader-budget, trader-risk, trader-news, trader-analyst, trader-pelosi and
-trader-broker are still US only: do not size, risk-check or place an NSE
-trade with them yet. Say so if the user tries.
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

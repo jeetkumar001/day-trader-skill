@@ -81,6 +81,7 @@ import urllib.parse
 import urllib.request
 
 UA = "Mozilla/5.0 (compatible; day-trader-skill/2.0; +https://github.com/Jakeschincariol/day-trader-skill)"
+NSE_UA = "day-trader-skill/2.0 (+https://github.com/Jakeschincariol/day-trader-skill)"  # plain, no browser name
 YAHOO_HOSTS = ("https://query2.finance.yahoo.com", "https://query1.finance.yahoo.com")
 NASDAQ_FILES = ("nasdaqlisted.txt", "otherlisted.txt")
 NASDAQ_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/"
@@ -282,8 +283,8 @@ def day_label(d):
 
 # ---------------------------------------------------------------- network
 
-def http_get(url, timeout=20):
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
+def http_get(url, timeout=20, ua=UA):
+    req = urllib.request.Request(url, headers={"User-Agent": ua, "Accept": "*/*"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
 
@@ -933,7 +934,7 @@ def fetch_nse_list(a):
         with open(p, encoding="utf-8", errors="replace") as fh:
             return fh.read()
     try:
-        return http_get(NSE_URL + NSE_FILE, timeout=60)
+        return http_get(NSE_URL + NSE_FILE, timeout=60, ua=NSE_UA)
     except (urllib.error.URLError, OSError) as e:
         raise ScanError("nseindia.com did not answer (%s). Open %s%s in your browser, save it, and run "
                         "`scan.py universe --market IN --offline <the saved file>`."

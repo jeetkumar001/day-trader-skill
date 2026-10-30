@@ -370,5 +370,74 @@ class WeightsMode(unittest.TestCase):
             self.assertIn("no weights file", err)
 
 
+BAJ = os.path.join(FIX, "trader-budget", "plan-bajfinance.json")
+
+
+class India(unittest.TestCase):
+    """"market": "IN": rupee limits (the _inr keys), NSE charges counted in the max loss."""
+
+    def setUp(self):
+        size.use_market("IN")
+        self.addCleanup(size.use_market, "US")
+        with open(BAJ) as fh:
+            self.plan = json.load(fh)
+
+    def test_charges_match_a_hand_count(self):
+        # 79 x 940.50 bought, 79 x 934.85 sold: brokerage 20 + 20, exchange 0.00297%, SEBI 10/crore,
+        # STT 0.025% of the sell, stamp 0.003% of the buy, GST 18% on brokerage + exchange + SEBI
+        bv, sv = 79 * 940.50, 79 * 934.85
+        exch, sebi = (bv + sv) * 0.0000297, (bv + sv) * 10 / 1e7
+        want = 40 + exch + sebi + sv * 0.00025 + bv * 0.00003 + 0.18 * (40 + exch + sebi)
+        self.assertAlmostEqual(size.trade_costs(79, 940.50, 934.85, size.NSE_COSTS), round(want, 2), places=2)
+        # a small order pays 0.03% brokerage, not Rs 20
+        self.assertLess(size.trade_costs(1, 100, 99, size.NSE_COSTS), 1)
+
+    def test_sizes_in_rupees_with_charges(self):
+        s = size.size_trade(self.plan, size.market_rules({"budget": 100000}), today="2026-10-30")
+        self.assertEqual(s["qty"], 79)
+        self.assertEqual(s["bound_by"], "position cap")
+        self.assertEqual(s["charges"], 73.26)
+        self.assertEqual(s["max_loss"], round(79 * 5.65 + 73.26, 2))
+        o = size.bracket_order(s)
+        self.assertEqual((o["exchange"], o["product"], o["market"]), ("NSE", "MIS", "IN"))
+        self.assertEqual(o["stop_loss_stop_price"], "934.85")
+        text = size.plan_report(s, o)
+        self.assertIn("\u20b974,299.50", text)
+        self.assertIn("charges", text)
+        self.assertIn("IST", text)
+        self.assertIn("place it yourself", text)
+
+    def test_charges_can_bind_the_max_loss(self):
+        s = size.size_trade(self.plan, size.market_rules({"budget": 10000000, "max_loss_per_trade_inr": 500,
+                                                          "max_order_inr": 10000000, "max_position_pct": 100}),
+                            today="2026-10-30")
+        self.assertEqual(s["bound_by"], "max loss")
+        self.assertLess(s["qty"], 500 // 5.65)
+        self.assertLessEqual(s["max_loss"], 500)
+        self.assertGreater(size.trade_costs(s["qty"] + 1, 940.50, 934.85, size.NSE_COSTS)
+                           + (s["qty"] + 1) * 5.65, 500)
+
+    def test_dollar_limits_are_refused(self):
+        with self.assertRaises(size.SizeError) as e:
+            size.market_rules({"budget": 100000, "max_loss_per_trade_usd": 50})
+        self.assertIn("max_loss_per_trade_inr", str(e.exception))
+
+    def test_cli_reads_the_market_from_the_config(self):
+        size.use_market("US")
+        with tempfile.TemporaryDirectory() as d:
+            c = os.path.join(d, "config.json")
+            with open(c, "w") as fh:
+                json.dump({"market": "IN", "budget": 100000}, fh)
+            pr = os.path.join(d, "prices.json")
+            with open(pr, "w") as fh:
+                json.dump({"prices": {}}, fh)
+            code, text, _ = run(["--plan", BAJ, "--config", c, "--prices", pr, "--portfolio",
+                                 os.path.join(d, "none.json"), "--now", "2026-10-30 09:40", "--json"])
+            self.assertEqual(code, 0)
+            doc = json.loads(text)
+            self.assertEqual(doc["orders"][0]["qty"], "79")
+            self.assertEqual(doc["sizing"]["market"], "IN")
+
+
 if __name__ == "__main__":
     unittest.main()

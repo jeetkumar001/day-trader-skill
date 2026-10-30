@@ -13,6 +13,7 @@ description: >-
   "watch my stop", "watch my trade", "remind me to close by 3:55", "is the
   market open", "when does the market open", "get me a price", or right
   after /trader-exit writes a plan.
+  Also runs on India's NSE (market IN, IST, rupees).
 argument-hint: "[ticker] [price]"
 ---
 
@@ -119,9 +120,9 @@ each year and is not in the calendar.
 - `add --from-plan` sets the flat-by alert at the plan's flat_by (15:10 IST
   by default).
 
-trader-budget, trader-risk, trader-news, trader-analyst, trader-pelosi and
-trader-broker are still US only: do not size, risk-check or place an NSE
-trade with them yet. Say so if the user tries.
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

@@ -159,5 +159,55 @@ class Cli(unittest.TestCase):
                          ["RevenueFromContractWithCustomerExcludingAssessedTax"])
 
 
+NSE = os.path.join(DIR, "nse")
+
+
+def yahoo_ts(sym):
+    with open(os.path.join(NSE, "yahoo-ts-%s.json" % sym)) as fh:
+        return json.load(fh)
+
+
+class India(unittest.TestCase):
+    """"market": "IN": Yahoo fundamentals for the .NS symbol, rupee crore, Indian fiscal quarters."""
+
+    def setUp(self):
+        facts.use_market("IN")
+        self.addCleanup(facts.use_market, "US")
+
+    def test_indian_fiscal_quarters(self):
+        self.assertEqual(facts.indian_quarter("2026-09-30"), ("Q2", "FY27"))
+        self.assertEqual(facts.indian_quarter("2026-03-31"), ("Q4", "FY26"))
+        self.assertEqual(facts.indian_quarter("2025-12-31"), ("Q3", "FY26"))
+        self.assertEqual(facts.indian_quarter("2026-06-30"), ("Q1", "FY27"))
+
+    def test_bajaj_finance(self):
+        r = facts.analyse_yahoo(yahoo_ts("BAJFINANCE"), name="Bajaj Finance Limited", symbol="BAJFINANCE")
+        cur = r["rows"][0]
+        self.assertEqual((cur["end"], cur["fiscal"]), ("2026-09-30", "Q2 FY27"))
+        self.assertEqual(cur["revenue"], 149647600000.0)
+        self.assertEqual(cur["revenue_yoy"], 23.2)          # vs 121,460.6 crore... in rupees, Q2 FY26
+        self.assertEqual(cur["eps_diluted"], 10.05)
+        self.assertIsNone(cur["gross_margin"])             # a lender: no gross profit line
+        self.assertEqual(r["ttm"]["eps_diluted"], 34.79)
+        text = facts.render("BAJFINANCE", r, None)
+        self.assertIn("\u20b9 crore", text)
+        self.assertIn("14,965", text)
+        self.assertIn("nseindia.com", text)
+
+    def test_a_gap_means_no_ttm(self):
+        # Yahoo skips Reliance's Sep 2025 quarter: four quarters do not fit inside a year
+        r = facts.analyse_yahoo(yahoo_ts("RELIANCE"), symbol="RELIANCE")
+        self.assertNotIn("revenue", r["ttm"])
+        self.assertEqual(r["rows"][0]["revenue_yoy"], 27.0)
+
+    def test_cli_offline(self):
+        code, out, err = run(["--market", "IN", "BAJFINANCE", "--offline", NSE, "--universe", ""])
+        self.assertEqual(code, 0, err)
+        self.assertIn("Q2 FY27", out)
+        code, _, err = run(["--market", "IN", "NOPE", "--offline", NSE, "--universe", ""])
+        self.assertEqual(code, 2)
+        self.assertIn("no file", err)
+
+
 if __name__ == "__main__":
     unittest.main()

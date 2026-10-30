@@ -12,6 +12,7 @@ description: >-
   "what is breaking out", "opening range breakouts", "scan for bull flags",
   "oversold stocks", "pre-market scan", "build my watchlist", "what should I
   look at today", or at the start of a trading day before /trader-news.
+  Also India's NSE (market IN): the EQ-series list from nseindia.com.
 argument-hint: "[universe | daily | orb] [--at HH:MM]"
 ---
 
@@ -163,9 +164,9 @@ each year and is not in the calendar.
 - Yahoo's NSE 5-minute feed skips bars on thin stocks, so fewer charts are
   usable than in the US (125 of the first 300 symbols on Oct 30 2026).
 
-trader-budget, trader-risk, trader-news, trader-analyst, trader-pelosi and
-trader-broker are still US only: do not size, risk-check or place an NSE
-trade with them yet. Say so if the user tries.
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

@@ -204,5 +204,56 @@ class Check(unittest.TestCase):
         self.assertEqual(state["last_check"], now.isoformat())
 
 
+NSE = os.path.join(DIR, "nse")
+
+
+class India(unittest.TestCase):
+    """"market": "IN": NSE's announcement and board-meeting feeds take the place of SEC."""
+
+    def setUp(self):
+        news.use_market("IN")
+        self.addCleanup(news.use_market, "US")
+        self.names = news.nse_names(os.path.join(NSE, "universe-in.txt"))
+
+    def feed(self, name, kind, watch):
+        with open(os.path.join(NSE, name), "rb") as fh:
+            return news.parse_nse_rss(fh.read(), kind, watch, dict(self.names))
+
+    def test_symbols_from_the_link_or_the_name(self):
+        items = self.feed("nse-announcements.xml", "announcement", {"VBL": None, "AJANTPHARM": None})
+        self.assertEqual({i["ticker"] for i in items}, {"VBL", "AJANTPHARM"})
+        # Ajanta's filing link says PRACHI_..., so it is matched by its name
+        aj = [i for i in items if i["ticker"] == "AJANTPHARM"][0]
+        self.assertIn("PRACHI_", aj["link"])
+        self.assertTrue(aj["important"])
+        self.assertEqual(aj["time"].isoformat(), "2026-10-30T07:32:20+00:00")   # 13:02:20 IST
+
+    def test_mutual_fund_navs_are_skipped(self):
+        items = self.feed("nse-announcements.xml", "announcement", {"X": None})
+        self.assertEqual(items, [])
+        self.assertNotIn("NAV", " ".join(i["summary"] for i in self.feed(
+            "nse-announcements.xml", "announcement", {"VBL": None})))
+
+    def test_board_meeting_carries_the_date(self):
+        items = self.feed("nse-board-meetings.xml", "board meeting", {"GRASIM": None})
+        self.assertTrue(items)
+        self.assertTrue(all("13-Nov-2026" in i["title"] for i in items))
+        self.assertTrue(any("earnings" in i["tags"] for i in news.tag(items, {"GRASIM": None})))
+
+    def test_cli_offline(self):
+        code, out, _ = run(["--market", "IN", "--tickers", "VBL", "GRASIM", "--offline", NSE,
+                            "--universe", os.path.join(NSE, "universe-in.txt"), "--no-moves",
+                            "--now", "2026-10-30T09:00:00Z", "--dry-run", "--state",
+                            os.path.join(tempfile.mkdtemp(), "news.json")])
+        self.assertEqual(code, 0)
+        self.assertIn("IST", out)
+        self.assertIn("Grasim Industries Limited: board meeting (Meeting Date: 13-Nov-2026)", out)
+        self.assertNotIn("SEC", out)
+
+    def test_yahoo_symbol(self):
+        self.assertEqual(news.yahoo_symbol("M&M"), "M%26M.NS")
+        self.assertIn("region=IN", news.MARKET["yahoo"])
+
+
 if __name__ == "__main__":
     unittest.main()

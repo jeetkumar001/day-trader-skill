@@ -154,13 +154,23 @@ real XBRL facts. They reproduce every number in the example above.
 
 ## India (NSE)
 
-The chart scanner, entry timer, exit planner, time machine and price alerts
-also run on India's NSE: put `"market": "IN"` in `trader/config.json` (or pass
-`--market IN`). Times are IST, the session is 9:15 AM to 3:30 PM with NSE's
-2026 holidays, prices are in rupees, stops and targets land on NSE's tick for
-the price, and the flat-by time defaults to 3:10 PM, before brokers square off
-intraday positions. Budget, risk, news, the earnings analyst, the Pelosi
-tracker and the order executor are still US only.
+Every skill also runs on India's NSE except the order executor: put
+`"market": "IN"` in `trader/config.json` (or pass `--market IN`). Times are
+IST, the session is 9:15 AM to 3:30 PM with NSE's 2026 holidays, prices are in
+rupees, stops and targets land on NSE's tick for the price, and the flat-by
+time defaults to 3:10 PM, before brokers square off intraday positions.
+
+- The scanner reads NSE's EQ-series list; budget and risk use rupee limits
+  (the `_inr` keys, see `trader-budget/config.in.example.json`) and count
+  intraday charges (brokerage, STT, exchange, SEBI, stamp duty, GST) in the
+  loss at the stop. Risk also checks NSE's price bands and trade-for-trade
+  series.
+- News reads NSE's announcement and board-meeting feeds instead of SEC 8-Ks;
+  the analyst reads Yahoo's fundamentals in rupee crore by Indian fiscal
+  quarter; the Pelosi tracker's `deals` command reads NSE's bulk and block
+  deals.
+- trader-broker sends US orders only and refuses an NSE order: you place it in
+  your own broker's app.
 
 ## Fine print
 

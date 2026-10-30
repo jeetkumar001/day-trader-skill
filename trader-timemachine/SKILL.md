@@ -13,6 +13,7 @@ description: >-
   carlo", "backtest this setup", "how often does this hit the target", "is
   this a coin flip", or after /trader-exit writes a plan, before
   /trader-budget.
+  Also runs on India's NSE (market IN).
 argument-hint: "[path to plan.json, or TICKER]"
 ---
 
@@ -114,9 +115,9 @@ each year and is not in the calendar.
   almost never be "full". BAJFINANCE on Oct 30 2026 had 58 full sessions in
   60 days.
 
-trader-budget, trader-risk, trader-news, trader-analyst, trader-pelosi and
-trader-broker are still US only: do not size, risk-check or place an NSE
-trade with them yet. Say so if the user tries.
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

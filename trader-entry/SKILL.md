@@ -12,6 +12,7 @@ description: >-
   TSLA", "has it broken out", "did it break the opening range", "entry
   signal", "time my entry", "check my watchlist", or after /trader-scanner
   and /trader-news, before /trader-exit.
+  Also runs on India's NSE (market IN, IST).
 argument-hint: "[TICKER] [--setup orb|level] [--interval 5m|1m]"
 ---
 
@@ -88,9 +89,9 @@ each year and is not in the calendar.
 - Defaults: `no_entries_before` 09:30 (the end of a 15-minute range) and
   `no_entries_after` 14:30, IST. trader/entry.json carries `"market": "IN"`.
 
-trader-budget, trader-risk, trader-news, trader-analyst, trader-pelosi and
-trader-broker are still US only: do not size, risk-check or place an NSE
-trade with them yet. Say so if the user tries.
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

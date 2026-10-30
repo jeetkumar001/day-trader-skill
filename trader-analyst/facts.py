@@ -36,6 +36,16 @@ How the quarters are built:
 company_tickers.json, companyfacts-CIK##########.json,
 submissions-CIK##########.json and <accession>/index.json from DIR.
 
+India ("market": "IN" in trader/config.json, or --market IN): NSE companies
+do not file with the SEC and NSE's own XBRL results sit behind its website,
+so the numbers come from Yahoo Finance's fundamentals timeseries for the .NS
+symbol (unofficial, about the last five quarters, consolidated):
+  https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/RELIANCE.NS
+Amounts print in rupee crore (1 crore = 10 million). Quarters are named by the
+Indian fiscal year (April to March): the quarter ending 30 Sep 2026 is Q2 FY27.
+No SEC User-Agent is needed. The company's results filing on nseindia.com is
+the authority: read it before trusting a number. Offline: yahoo-ts-SYMBOL.json.
+
 Numbers only: this tool never says whether a stock is a buy.
 """
 
@@ -48,6 +58,7 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -70,10 +81,44 @@ CONCEPTS = {
     "eps_diluted": ["EarningsPerShareDiluted", "EarningsPerShareBasicAndDiluted"],
 }
 FLOWS = ("revenue", "cost_of_revenue", "gross_profit", "operating_income", "net_income")
+YAHOO_TS = ("https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/%s"
+            "?type=%s&period1=%d&period2=%d")
+YAHOO_TYPES = {"revenue": "quarterlyTotalRevenue", "cost_of_revenue": "quarterlyCostOfRevenue",
+               "gross_profit": "quarterlyGrossProfit", "operating_income": "quarterlyOperatingIncome",
+               "net_income": "quarterlyNetIncome", "eps_diluted": "quarterlyDilutedEPS"}
+PLAIN_UA = "day-trader-skill/2.0 (+https://github.com/Jakeschincariol/day-trader-skill)"
+NSE_RESULTS = "https://www.nseindia.com/companies-listing/corporate-filings-financial-results"
+MARKETS = {
+    "US": {"code": "US", "currency": "$", "unit": 1e6, "unit_name": "US$ millions", "unit_short": "M"},
+    "IN": {"code": "IN", "currency": "\u20b9", "unit": 1e7, "unit_name": "\u20b9 crore", "unit_short": " Cr"},
+}
+MARKET = MARKETS["US"]
 
 
 class FactsError(Exception):
     pass
+
+
+def use_market(code):
+    """"US" (default, SEC XBRL) or "IN" (NSE companies, Yahoo fundamentals in rupees)."""
+    global MARKET
+    key = (code or "US").strip().upper()
+    if key not in MARKETS:
+        raise FactsError("market wants US or IN, not %r" % code)
+    MARKET = MARKETS[key]
+    return MARKET
+
+
+def market_from(path):
+    """The "market" in a JSON config, or None."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return doc.get("market") if isinstance(doc, dict) else None
 
 
 def user_agent(cli=None, config="trader/config.json"):
@@ -93,20 +138,21 @@ class Fetcher(object):
     def __init__(self, ua=None, offline=None, pause=0.15):
         self.ua, self.offline, self.pause, self._last = ua, offline, pause, 0.0
 
-    def json(self, url, name):
+    def json(self, url, name, ua=None):
         if self.offline:
             path = os.path.join(self.offline, name)
             if not os.path.isfile(path):
                 raise FactsError("offline: no file %s" % path)
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
-        if not self.ua:
+        ua = ua or self.ua
+        if not ua:
             raise FactsError(UA_HELP)
         gap = time.time() - self._last
         if gap < self.pause:
             time.sleep(self.pause - gap)
         self._last = time.time()
-        req = urllib.request.Request(url, headers={"User-Agent": self.ua,
+        req = urllib.request.Request(url, headers={"User-Agent": ua,
                                                    "Accept-Encoding": "gzip"})
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -238,6 +284,55 @@ def analyse(companyfacts, quarters=6, name=None):
     concepts = {}
     for key in CONCEPTS:
         s[key], concepts[key] = series(companyfacts, key, derive_q4=True)
+    out = analyse_series(s, quarters)
+    out.update({"entity": name or companyfacts.get("entityName"),
+                "cik": str(companyfacts.get("cik", "")).zfill(10), "concepts": concepts})
+    return out
+
+
+def indian_quarter(end):
+    """"2026-09-30" -> ("Q2", "FY27"): India's fiscal year runs April to March."""
+    d = _date(end)
+    fy = d.year + 1 if d.month > 3 else d.year
+    return "Q%d" % (((d.month - 4) % 12) // 3 + 1), "FY%02d" % (fy % 100)
+
+
+def yahoo_series(doc):
+    """Yahoo fundamentals timeseries JSON -> {key: {end: {"value", "fp", "fy", ...}}} (3-month values only)."""
+    try:
+        results = doc["timeseries"]["result"]
+    except (KeyError, TypeError):
+        raise FactsError("Yahoo fundamentals answer has no timeseries")
+    by_type = {v: k for k, v in YAHOO_TYPES.items()}
+    s = {k: {} for k in CONCEPTS}
+    for r in results or []:
+        t = ((r.get("meta") or {}).get("type") or [None])[0]
+        key = by_type.get(t)
+        if not key:
+            continue
+        for v in r.get(t) or []:
+            if not v or v.get("periodType") != "3M" or "reportedValue" not in v:
+                continue
+            end = v["asOfDate"]
+            fp, fy = indian_quarter(end)
+            s[key][end] = {"value": float(v["reportedValue"]["raw"]), "start": None, "fp": fp, "fy": fy,
+                           "filed": None, "form": None, "currency": v.get("currencyCode")}
+    return s
+
+
+def analyse_yahoo(doc, quarters=6, name=None, symbol=None):
+    s = yahoo_series(doc)
+    cur = {v.get("currency") for k in s for v in s[k].values() if v.get("currency")}
+    if cur and cur != {"INR"}:
+        raise FactsError("Yahoo reports %s in %s, not rupees" % (symbol, "/".join(sorted(cur))))
+    out = analyse_series(s, quarters)
+    out.update({"entity": name or symbol, "cik": None,
+                "concepts": {k: [YAHOO_TYPES[k]] if s[k] else [] for k in s}})
+    return out
+
+
+def analyse_series(s, quarters=6):
+    """Rows and the trailing twelve months from quarterly series."""
     rev = s["revenue"]
     if not rev and not s["net_income"]:
         raise FactsError("no quarterly revenue or net income in the XBRL facts")
@@ -273,9 +368,7 @@ def analyse(companyfacts, quarters=6, name=None):
             ttm[key] = sum(s[key][e]["value"] for e in last4)
     if "eps_diluted" in ttm:
         ttm["eps_diluted"] = round(ttm["eps_diluted"], 2)
-    return {"entity": name or companyfacts.get("entityName"),
-            "cik": str(companyfacts.get("cik", "")).zfill(10),
-            "rows": rows, "ttm": ttm, "concepts": concepts}
+    return {"rows": rows, "ttm": ttm}
 
 
 def stale_note(result, filings):
@@ -301,9 +394,14 @@ def changes(result):
     out = []
 
     def money(v):
-        return "n/a" if v is None else "$%.2fB" % (v / 1e9) if abs(v) >= 1e9 else "$%.1fM" % (v / 1e6)
+        if v is None:
+            return "n/a"
+        if MARKET["code"] == "IN":
+            return "\u20b9{:,.0f} crore".format(v / 1e7)
+        return "$%.2fB" % (v / 1e9) if abs(v) >= 1e9 else "$%.1fM" % (v / 1e6)
 
-    label = "Quarter ending %s%s" % (cur["end"], " (derived from the 10-K)" if cur["derived"] else "")
+    label = "Quarter ending %s%s%s" % (cur["end"], (" (%s)" % cur["fiscal"].strip()) if MARKET["code"] == "IN" else "",
+                                       " (derived from the 10-K)" if cur["derived"] else "")
     line = "%s: revenue %s" % (label, money(cur["revenue"]))
     if cur["revenue_yoy"] is not None:
         line += " (%+.1f%% vs a year earlier)" % cur["revenue_yoy"]
@@ -311,7 +409,7 @@ def changes(result):
     if cur["net_income_yoy"] is not None:
         line += " (%+.1f%%)" % cur["net_income_yoy"]
     if cur["eps_diluted"] is not None:
-        line += ", diluted EPS $%.2f" % cur["eps_diluted"]
+        line += ", diluted EPS %s%.2f" % (MARKET["currency"], cur["eps_diluted"])
         if cur["eps_yoy"] is not None:
             line += " (%+.1f%%)" % cur["eps_yoy"]
     out.append(line + ".")
@@ -326,7 +424,8 @@ def changes(result):
     if cur["net_income"] is not None and cur["operating_income"] is not None \
             and cur["net_income"] > cur["operating_income"]:
         out.append("Net income is above operating income: it includes gains outside the "
-                   "business (investments, tax items). Check the 10-Q before reading it as growth.")
+                   "business (investments, tax items). Check the %s before reading it as growth."
+                   % ("10-Q" if MARKET["code"] == "US" else "results filing"))
     if prev and cur["revenue"] is not None and prev["revenue"]:
         out.append("Revenue %+.1f%% vs the quarter before (many businesses are seasonal: "
                    "compare with a year earlier first)." % pct(cur["revenue"], prev["revenue"]))
@@ -386,7 +485,7 @@ def latest_filings(submissions, cik, fetcher=None):
 def _m(v):
     if v is None:
         return "-"
-    return "{:,.0f}".format(v / 1e6)
+    return "{:,.0f}".format(v / MARKET["unit"])
 
 
 def _p(v):
@@ -398,8 +497,13 @@ def _pm(v):
 
 
 def render(ticker, result, filings):
-    out = ["%s (%s), CIK %s. US$ millions except EPS. Source: SEC XBRL company facts." % (
-        result["entity"], ticker, result["cik"]), ""]
+    if MARKET["code"] == "IN":
+        out = ["%s (%s), NSE. %s except EPS (\u20b9). Source: Yahoo Finance fundamentals (unofficial); "
+               "the results filing on nseindia.com is the authority." % (result["entity"], ticker,
+                                                                         MARKET["unit_name"]), ""]
+    else:
+        out = ["%s (%s), CIK %s. US$ millions except EPS. Source: SEC XBRL company facts." % (
+            result["entity"], ticker, result["cik"]), ""]
     out.append("%-11s %-9s %10s %8s %7s %7s %7s %10s %8s %7s" % (
         "quarter end", "fiscal", "revenue", "rev yoy", "gross", "oper", "net",
         "net inc", "EPS dil", "EPS yoy"))
@@ -412,10 +516,11 @@ def render(ticker, result, filings):
     t = result["ttm"]
     if t:
         out.append("")
+        c, u = MARKET["currency"], MARKET["unit_short"]
         out.append("Last 4 quarters: revenue %s, net income %s, diluted EPS %s." % (
-            "$" + _m(t.get("revenue")) + "M" if t.get("revenue") is not None else "-",
-            "$" + _m(t.get("net_income")) + "M" if t.get("net_income") is not None else "-",
-            "$%.2f" % t["eps_diluted"] if t.get("eps_diluted") is not None else "-"))
+            c + _m(t.get("revenue")) + u if t.get("revenue") is not None else "-",
+            c + _m(t.get("net_income")) + u if t.get("net_income") is not None else "-",
+            "%s%.2f" % (c, t["eps_diluted"]) if t.get("eps_diluted") is not None else "-"))
     out.append("")
     out.append("What changed:")
     for line in changes(result):
@@ -429,6 +534,12 @@ def render(ticker, result, filings):
         if e8:
             out.append("Latest earnings 8-K (item 2.02): filed %s  %s" % (
                 e8["filed"], e8["exhibit"] or e8["index"]))
+    if MARKET["code"] == "IN":
+        out.append("")
+        out.append("Results filings: %s (search %s)." % (NSE_RESULTS, ticker))
+        if result["rows"] and (_date(result["rows"][0]["end"]) - _dt.date.today()).days < -100:
+            out.append("NOTE: the latest quarter here ends %s; a newer one may be filed already. "
+                       "Check the filing." % result["rows"][0]["end"])
     note = stale_note(result, filings)
     if note:
         out.append("")
@@ -450,7 +561,8 @@ def metrics_row(ticker, result):
             "revenue_growth_yoy": cur.get("revenue_yoy"), "eps_growth_yoy": cur.get("eps_yoy"),
             "net_income_growth_yoy": cur.get("net_income_yoy"),
             "gross_margin": cur.get("gross_margin"), "operating_margin": cur.get("operating_margin"),
-            "net_margin": cur.get("net_margin"), "source": "SEC XBRL company facts"}
+            "net_margin": cur.get("net_margin"),
+            "source": "SEC XBRL company facts" if MARKET["code"] == "US" else "Yahoo Finance fundamentals (INR)"}
 
 
 def clean_title(title):
@@ -478,10 +590,19 @@ def main(argv=None):
     ap.add_argument("--config", default="trader/config.json")
     ap.add_argument("--offline", metavar="DIR")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--market", help="US (default) or IN (NSE); default: \"market\" in the config")
+    ap.add_argument("--universe", default="trader/universe-in.txt", help="India: SYMBOL|Name lines for names")
     args = ap.parse_args(argv)
     if not args.tickers and not args.cik:
         ap.print_help()
         return 2
+    try:
+        use_market(args.market or market_from(args.config))
+    except FactsError as exc:
+        print("facts: %s" % exc, file=sys.stderr)
+        return 2
+    if MARKET["code"] == "IN":
+        return main_india(args)
     ua = user_agent(args.user_agent, args.config)
     if not ua and not args.offline:
         print("facts: " + UA_HELP, file=sys.stderr)
@@ -538,6 +659,57 @@ def main(argv=None):
             json.dump({"as_of": _dt.date.today().isoformat(),
                        "companies": sorted(existing.values(), key=lambda r: r["ticker"])},
                       fh, indent=2)
+            fh.write("\n")
+        if not args.json:
+            print("wrote %s (%d companies)" % (args.metrics, len(existing)))
+    return 0 if results and not failed else (1 if results else 2)
+
+
+def main_india(args):
+    """NSE companies: one Yahoo fundamentals request per symbol, no SEC."""
+    names = {}
+    if args.universe and os.path.isfile(args.universe):
+        with open(args.universe, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "|" in line:
+                    sym, name = line.rstrip("\n").split("|", 1)
+                    names[sym.strip().upper()] = name.strip()
+    fetcher = Fetcher(PLAIN_UA, offline=args.offline)
+    now = int(time.time())
+    types = ",".join(YAHOO_TYPES.values())
+    results, rows, failed = [], [], 0
+    for t in args.tickers:
+        tick = t.upper()
+        ysym = urllib.parse.quote(tick + ".NS", safe=".-")
+        try:
+            doc = fetcher.json(YAHOO_TS % (ysym, types, now - 3 * 365 * 86400, now + 86400),
+                               "yahoo-ts-%s.json" % tick)
+            result = analyse_yahoo(doc, quarters=args.quarters, name=names.get(tick), symbol=tick)
+        except FactsError as exc:
+            print("facts: %s: %s" % (tick, exc), file=sys.stderr)
+            failed += 1
+            continue
+        results.append({"ticker": tick, "result": result, "filings": None,
+                        "changes": changes(result), "note": None})
+        rows.append(metrics_row(tick, result))
+        if not args.json:
+            sys.stdout.write(render(tick, result, None))
+            sys.stdout.write("\n")
+    if args.json:
+        print(json.dumps(results, indent=2))
+    if args.metrics and rows:
+        existing = {}
+        if os.path.isfile(args.metrics):
+            with open(args.metrics, encoding="utf-8") as fh:
+                existing = {r["ticker"]: r for r in json.load(fh).get("companies", [])}
+        for r in rows:
+            existing[r["ticker"]] = r
+        folder = os.path.dirname(args.metrics)
+        if folder:
+            os.makedirs(folder, exist_ok=True)
+        with open(args.metrics, "w", encoding="utf-8") as fh:
+            json.dump({"as_of": _dt.date.today().isoformat(),
+                       "companies": sorted(existing.values(), key=lambda r: r["ticker"])}, fh, indent=2)
             fh.write("\n")
         if not args.json:
             print("wrote %s (%d companies)" % (args.metrics, len(existing)))

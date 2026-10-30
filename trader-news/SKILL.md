@@ -10,6 +10,7 @@ description: >-
   the user says "any news on TSLA", "why is this moving", "what's the news on
   my watchlist", "morning briefing", "pre-market news", "monitor the news",
   "did anything break", "check the 8-Ks", or after /trader-scanner finds setups.
+  Also India's NSE (market IN): NSE announcements and board meetings instead of SEC.
 argument-hint: "[tickers]"
 ---
 
@@ -58,6 +59,28 @@ python3 "${CLAUDE_SKILL_DIR}/news.py" --no-sec --json
   A move with no headline is worth saying out loud too.
 - **No predictions.** Report what was published and how far the price is from
   yesterday's close. Never say what the stock will do next.
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN`. In
+India mode SEC is off, and NSE's own public RSS feeds take its place, fetched
+once a check for every ticker:
+
+- **Announcements** (`content/RSS/Online_announcements.xml`): results, board
+  outcomes, orders won, resignations, fund raising, press releases. Mutual fund
+  NAV declarations are skipped.
+- **Board meetings** (`content/RSS/Board_Meetings.xml`): the date a company
+  will consider its results, the Indian earnings date.
+
+The feeds name the company, not the symbol, so an item is matched by the
+symbol in its filing link or by the company name in `trader/universe-in.txt`
+(trader-scanner `universe --market IN`). They hold only the last several
+hours, so check through the day. `!` marks an important subject: financial
+results, a board outcome, a resignation, a default, insolvency, a credit
+rating, an acquisition, a buyback or fund raising. Yahoo headlines use the
+`.NS` symbol and are often empty for NSE stocks. The move line and times are in
+IST. If NSE does not answer, the note gives the feed's address to open in a
+browser. Offline: `nse-announcements.xml` and `nse-board-meetings.xml`.
 
 ## Steps
 

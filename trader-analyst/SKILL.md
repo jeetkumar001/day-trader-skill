@@ -11,6 +11,7 @@ description: >-
   changed this quarter", "is revenue growing", "check the 10-Q", "compare
   margins", "sum up the call", "does it report this week", or before trading
   a stock around its earnings.
+  Also India's NSE companies (market IN): Yahoo fundamentals in rupee crore by Indian fiscal quarter.
 argument-hint: "[tickers]"
 ---
 
@@ -67,6 +68,20 @@ email. It refuses to call SEC without one.
 - **Flag one-offs.** When net income is above operating income, gains outside
   the business (investment marks, tax items) are inside it. The tool says so.
   Banks and insurers have no gross margin: blank, not zero.
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN`. NSE
+companies do not file with the SEC, so in India mode the numbers come from
+Yahoo Finance's fundamentals timeseries for the `.NS` symbol: quarterly
+revenue, gross profit, operating income, net income and diluted EPS, about the
+last five quarters, in rupees (no SEC User-Agent needed). It is unofficial:
+the company's results filing on nseindia.com is the authority, and the report
+links to it. Amounts print in rupee crore. Quarters use India's April to
+March fiscal year (the quarter ending 30 Sep 2026 is Q2 FY27). Lenders such as
+BAJFINANCE have no gross or operating line, so those margins are blank. When
+Yahoo skips a quarter, the trailing twelve months is left out rather than
+guessed, and a latest quarter older than about 100 days gets a note.
 
 ## Steps
 

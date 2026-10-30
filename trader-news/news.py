@@ -42,7 +42,21 @@ results). They name the company, not the symbol, so items are matched by the
 symbol in the filing's link or by the name in trader/universe-in.txt
 (trader-scanner). The feeds hold only the last several hours: check through the
 day. Yahoo headlines use the .NS symbol and are often empty for NSE stocks.
-Times print in IST. Offline names: nse-announcements.xml, nse-board-meetings.xml.
+
+Indian business media (India mode; --no-media skips them):
+  - The papers' own RSS feeds, once per check: Mint (livemint.com/rss/markets,
+    /rss/companies), The Economic Times (markets, stocks) and The Hindu
+    BusinessLine (markets, companies). Business Standard refuses tools (403).
+  - Moneycontrol and Mint stories per ticker from Google News's public RSS
+    search, limited to moneycontrol.com and livemint.com (Moneycontrol's own
+    RSS feeds stopped updating in April 2024). Links are Google News links
+    that open the story.
+  A media story is kept only when its headline or summary names the company
+  (or the symbol in capitals): a search hit alone is not enough.
+
+Times print in IST. Offline names: nse-announcements.xml, nse-board-meetings.xml,
+mint-markets.xml, mint-companies.xml, et-markets.xml, et-stocks.xml,
+bl-markets.xml, bl-companies.xml, gnews-SYMBOL.xml.
 
 Headlines are leads, not facts: open the story before acting, and treat
 nothing here as advice.
@@ -77,6 +91,19 @@ NSE_FEEDS = [  # NSE's public RSS feeds (nseindia.com, read 2026-10-30)
     ("board meeting", "https://nsearchives.nseindia.com/content/RSS/Board_Meetings.xml",
      "nse-board-meetings.xml"),
 ]
+MEDIA_FEEDS = [  # the papers' own RSS feeds (read 2026-10-30; Business Standard answers 403 to tools)
+    ("Mint", "https://www.livemint.com/rss/markets", "mint-markets.xml"),
+    ("Mint", "https://www.livemint.com/rss/companies", "mint-companies.xml"),
+    ("Economic Times", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms", "et-markets.xml"),
+    ("Economic Times", "https://economictimes.indiatimes.com/markets/stocks/rssfeeds/2146842.cms", "et-stocks.xml"),
+    ("BusinessLine", "https://www.thehindubusinessline.com/markets/feeder/default.rss", "bl-markets.xml"),
+    ("BusinessLine", "https://www.thehindubusinessline.com/companies/feeder/default.rss", "bl-companies.xml"),
+]
+GNEWS = "https://news.google.com/rss/search?q=%s&hl=en-IN&gl=IN&ceid=IN:en"
+MEDIA_SITES = ("moneycontrol.com", "livemint.com")
+MEDIA_NAMES = {"moneycontrol": "Moneycontrol", "livemint": "Mint", "mint": "Mint",
+               "economictimes": "Economic Times", "economic times": "Economic Times",
+               "businessline": "BusinessLine"}
 # NSE subjects that can move a stock the way an important 8-K item does
 NSE_IMPORTANT = re.compile(r"financial result|outcome of board meeting|resignation|fraud|default|insolvency|"
                            r"suspension|delisting|credit rating|search|penalt|show cause|litigation|"
@@ -239,6 +266,8 @@ class Fetcher(object):
             raise NewsError("HTTP %s for %s" % (exc.code, url))
         except urllib.error.URLError as exc:
             raise NewsError("could not reach %s: %s" % (url, exc.reason))
+        except OSError as exc:   # a read timeout or a dropped connection
+            raise NewsError("no answer from %s (%s)" % (url.split("/")[2], exc.__class__.__name__))
 
 
 def yahoo_symbol(ticker):
@@ -405,6 +434,74 @@ def parse_nse_rss(data, kind, watch, names):
     return out
 
 
+def short_name(name):
+    """"Bajaj Finance Limited" -> "Bajaj Finance": the way headlines name a company."""
+    n = re.sub(r"\s+", " ", (name or "")).strip()
+    return re.sub(r"(?i)[\s.,]*\b(limited|ltd\.?)$", "", n).strip()
+
+
+def nse_display_names(path="trader/universe-in.txt"):
+    """{SYMBOL: short company name} from trader-scanner's NSE universe."""
+    out = {}
+    if path and os.path.isfile(path):
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "|" in line:
+                    sym, name = line.rstrip("\n").split("|", 1)
+                    out[sym.strip().upper()] = short_name(name)
+    return out
+
+
+def media_source(text):
+    """"Moneycontrol.com", "Livemint", "https://www.moneycontrol.com" -> "Moneycontrol" / "Mint", else None."""
+    t = (text or "").lower()
+    for key, label in MEDIA_NAMES.items():
+        if key in t:
+            return label
+    return None
+
+
+def parse_media_rss(data, watch, source=None, ticker=None):
+    """Mint's RSS, or a Google News search -> items that name one of your companies.
+
+    source  "Mint" for Mint's own feed; None = read it per item (Google News <source>)
+    ticker  the ticker a Google News search was for (it still has to be named)"""
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as exc:
+        raise NewsError("media RSS is not valid XML: %s" % exc)
+    pats = mention_patterns(watch)
+    out = []
+    for it in root.iter("item"):
+        title, link = _text(it, "title"), _text(it, "link")
+        src = source
+        if src is None:
+            el = next((c for c in it.iter() if _local(c.tag) == "source"), None)
+            src = media_source((el.text or "") + " " + (el.get("url", "") if el is not None else "")) \
+                if el is not None else None
+            title = re.sub(r"\s+-\s+[^-]*$", "", title).strip()   # Google adds " - Livemint"
+        if not src or not title:
+            continue
+        summary = re.sub(r"<[^>]+>", " ", _text(it, "description"))
+        summary = "" if source is None else re.sub(r"\s+", " ", summary).strip()
+        hay = title + " " + summary
+        hits = [t for t in sorted(watch) if pats[t].search(hay)]
+        if not hits:
+            continue
+        first = ticker if ticker in hits else hits[0]
+        out.append({"id": "media:" + (_text(it, "guid") or link), "source": src, "kind": "headline",
+                    "ticker": first, "title": title, "summary": summary, "link": link,
+                    "time": parse_time(_text(it, "pubDate"))})
+    return out
+
+
+def gnews_url(name, ticker, hours):
+    days = max(1, int(-(-hours // 24)))
+    who = '"%s"' % (name or ticker)
+    q = "%s (%s) when:%dd" % (who, " OR ".join("site:" + s for s in MEDIA_SITES), days)
+    return GNEWS % urllib.parse.quote(q)
+
+
 def parse_chart(data, ticker):
     """Yahoo chart JSON -> {"ticker", "price", "prev_close", "pct", "time"} or raise."""
     try:
@@ -448,6 +545,8 @@ def mention_patterns(watch):
                 r"\b(?:NYSE|NASDAQ|Nasdaq|NSE|BSE)\s*:\s*%s\b" % re.escape(t)]
         if name and len(name) >= 4:
             alts.append(r"\b%s\b" % re.escape(name).replace(r"\ ", r"[\s-]"))
+        if MARKET["code"] == "IN" and len(t) >= 3:
+            alts.append(r"(?<![\w&-])%s(?![\w&-])" % re.escape(t))   # NSE headlines use symbols: "NALCO shares"
         pats[t] = re.compile("|".join(alts))
     return pats
 
@@ -495,7 +594,8 @@ def fingerprint(it):
 
 # ---------------------------------------------------------------- the check
 
-def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=None, names=None):
+def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=None, names=None,
+            media=True, hours=48):
     errors = [] if errors is None else errors
     items = []
     for t in sorted(watch):
@@ -511,6 +611,8 @@ def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=No
                 items += parse_nse_rss(fetcher.get(url, fname, ua=NSE_UA), kind, watch, names)
             except NewsError as exc:
                 errors.append("NSE %ss: %s. Open %s in your browser to read them" % (kind, exc, url))
+        if media:
+            items += collect_media(fetcher, watch, errors, hours)
         return items
     if sec:
         try:
@@ -531,6 +633,26 @@ def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=No
                     items += parse_sec_atom(data, t)
                 except NewsError as exc:
                     errors.append("SEC %s for %s: %s" % (form, t, exc))
+    return items
+
+
+def collect_media(fetcher, watch, errors, hours=48):
+    """Indian business media: the papers' own feeds once (Mint, Economic Times, BusinessLine),
+    then one Google News search per ticker for Moneycontrol and Mint."""
+    items = []
+    for label, url, fname in MEDIA_FEEDS:
+        try:
+            items += parse_media_rss(fetcher.get(url, fname, ua=NSE_UA), watch, source=label)
+        except NewsError as exc:
+            if not (fetcher.offline and "no file" in str(exc)):
+                errors.append("%s feed %s: %s" % (label, url, exc))
+    for t in sorted(watch):
+        try:
+            data = fetcher.get(gnews_url(watch.get(t), t, hours), "gnews-%s.xml" % t, ua=NSE_UA)
+            items += parse_media_rss(data, watch, ticker=t)
+        except NewsError as exc:
+            if not (fetcher.offline and "no file" in str(exc)):
+                errors.append("Moneycontrol / Mint search for %s: %s" % (t, exc))
     return items
 
 
@@ -583,7 +705,8 @@ def render(items, errors, now, moves=None, move_pct=MOVE_PCT):
         when = (to_eastern(it["time"]).strftime("%Y-%m-%d %H:%M ") + MARKET["zone"]) if it["time"] else "time unknown"
         mark = "!" if it.get("important") else " "
         who = ",".join(it["touches"]) or it["ticker"]
-        out.append("%s %s  %-11s %-13s %s" % (mark, when, who, it["source"], it["title"]))
+        out.append("%s %s  %-11s %-*s %s" % (mark, when, who, 13 if MARKET["code"] == "US" else 14,
+                                            it["source"], it["title"]))
         extra = []
         if it["tags"]:
             extra.append("tags: " + ", ".join(it["tags"]))
@@ -617,6 +740,7 @@ def main(argv=None):
     ap.add_argument("--forms", default="8-K", help="SEC forms to watch, comma separated")
     ap.add_argument("--no-sec", action="store_true", help="headlines only")
     ap.add_argument("--no-moves", action="store_true", help="skip the price line per ticker")
+    ap.add_argument("--no-media", action="store_true", help="India: skip Moneycontrol and Mint")
     ap.add_argument("--move-pct", type=float, default=MOVE_PCT, help="flag a move this big (percent)")
     ap.add_argument("--user-agent", help="SEC User-Agent: \"Your Name you@example.com\"")
     ap.add_argument("--config", default="trader/config.json")
@@ -652,6 +776,9 @@ def main(argv=None):
     names = {}
     if MARKET["code"] == "IN":
         names = nse_names(args.universe)
+        display = nse_display_names(args.universe)
+        for t in watch:
+            watch[t] = short_name(watch[t]) if watch[t] else display.get(t)
         if not names:
             errors.append("no %s: NSE items are matched by the symbol in their link only "
                           "(scan.py universe --market IN writes it)" % args.universe)
@@ -661,7 +788,8 @@ def main(argv=None):
         sec = False
     fetcher = Fetcher(ua, offline=args.offline)
     forms = [f.strip().upper() for f in args.forms.split(",") if f.strip()]
-    items = collect(fetcher, watch, state, sec=sec, forms=forms, errors=errors, names=names)
+    items = collect(fetcher, watch, state, sec=sec, forms=forms, errors=errors, names=names,
+                    media=not args.no_media, hours=args.hours)
     items = dedupe(tag(items, watch))
     shown = select(items, state, now, hours=args.hours, show_all=args.all)
     moves = [] if args.no_moves else collect_moves(fetcher, watch, errors)

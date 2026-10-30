@@ -165,7 +165,8 @@ time defaults to 3:10 PM, before brokers square off intraday positions.
   intraday charges (brokerage, STT, exchange, SEBI, stamp duty, GST) in the
   loss at the stop. Risk also checks NSE's price bands and trade-for-trade
   series.
-- News reads NSE's announcement and board-meeting feeds instead of SEC 8-Ks;
+- News reads NSE's announcement and board-meeting feeds instead of SEC 8-Ks,
+  plus Moneycontrol, Mint, The Economic Times and The Hindu BusinessLine;
   the analyst reads Yahoo's fundamentals in rupee crore by Indian fiscal
   quarter; the Pelosi tracker's `deals` command reads NSE's bulk and block
   deals.

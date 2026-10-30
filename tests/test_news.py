@@ -255,5 +255,57 @@ class India(unittest.TestCase):
         self.assertIn("region=IN", news.MARKET["yahoo"])
 
 
+class IndianMedia(unittest.TestCase):
+    """India: Mint, Economic Times and BusinessLine feeds, Moneycontrol and Mint via Google News."""
+
+    def setUp(self):
+        news.use_market("IN")
+        self.addCleanup(news.use_market, "US")
+        self.watch = {"RELIANCE": "Reliance Industries", "VBL": "Varun Beverages"}
+
+    def raw(self, name):
+        with open(os.path.join(NSE, name), "rb") as fh:
+            return fh.read()
+
+    def test_short_names(self):
+        self.assertEqual(news.short_name("Bajaj Finance Limited"), "Bajaj Finance")
+        self.assertEqual(news.short_name("SKIPPER LIMITED"), "SKIPPER")
+        self.assertEqual(news.short_name("Thomas Cook  (India)  Ltd."), "Thomas Cook (India)")
+
+    def test_paper_feed_keeps_only_named_companies(self):
+        items = news.parse_media_rss(self.raw("mint-markets.xml"), self.watch, source="Mint")
+        self.assertEqual(sorted(i["ticker"] for i in items), ["RELIANCE", "VBL"])   # gold is dropped
+        vbl = [i for i in items if i["ticker"] == "VBL"][0]
+        self.assertIn("Stocks to watch", vbl["title"])                             # matched by the symbol
+        et = news.parse_media_rss(self.raw("et-stocks.xml"), self.watch, source="Economic Times")
+        self.assertEqual(len(et), 1)
+        self.assertNotIn("<img", et[0]["summary"])
+
+    def test_google_news_search(self):
+        items = news.parse_media_rss(self.raw("gnews-RELIANCE.xml"), self.watch, ticker="RELIANCE")
+        self.assertEqual([(i["source"], i["title"]) for i in items], [
+            ("Moneycontrol", "Reliance Industries Q2 results: Profit may top Rs 21,000 crore"),
+            ("Mint", "Reliance Industries Q2 results today: what to watch")])
+        self.assertEqual(items[0]["time"].isoformat(), "2026-10-30T04:06:00+00:00")
+        self.assertIn("site%3Amoneycontrol.com", news.gnews_url("Reliance Industries", "RELIANCE", 48))
+        self.assertIn("when%3A2d", news.gnews_url("Reliance Industries", "RELIANCE", 48))
+
+    def test_cli_offline_all_sources(self):
+        code, out, _ = run(["--market", "IN", "--tickers", "RELIANCE", "--offline", NSE,
+                            "--universe", os.path.join(NSE, "universe-in.txt"), "--no-moves",
+                            "--now", "2026-10-30T09:00:00Z", "--dry-run", "--state",
+                            os.path.join(tempfile.mkdtemp(), "news.json")])
+        self.assertEqual(code, 0)
+        for src in ("Moneycontrol", "Mint", "Economic Times"):
+            self.assertIn(src, out)
+        # Mint's own feed and the Google News copy of the same story show once
+        self.assertEqual(out.count("Reliance Industries Q2 results today: what to watch"), 1)
+        code, out, _ = run(["--market", "IN", "--tickers", "RELIANCE", "--offline", NSE, "--no-media",
+                            "--universe", os.path.join(NSE, "universe-in.txt"), "--no-moves",
+                            "--now", "2026-10-30T09:00:00Z", "--dry-run", "--state",
+                            os.path.join(tempfile.mkdtemp(), "news.json")])
+        self.assertNotIn("Moneycontrol", out)
+
+
 if __name__ == "__main__":
     unittest.main()

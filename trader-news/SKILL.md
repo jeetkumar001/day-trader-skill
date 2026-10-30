@@ -10,7 +10,8 @@ description: >-
   the user says "any news on TSLA", "why is this moving", "what's the news on
   my watchlist", "morning briefing", "pre-market news", "monitor the news",
   "did anything break", "check the 8-Ks", or after /trader-scanner finds setups.
-  Also India's NSE (market IN): NSE announcements and board meetings instead of SEC.
+  Also India's NSE (market IN): NSE announcements and board meetings instead of SEC,
+  plus Moneycontrol, Mint, Economic Times and BusinessLine.
 argument-hint: "[tickers]"
 ---
 
@@ -79,7 +80,23 @@ hours, so check through the day. `!` marks an important subject: financial
 results, a board outcome, a resignation, a default, insolvency, a credit
 rating, an acquisition, a buyback or fund raising. Yahoo headlines use the
 `.NS` symbol and are often empty for NSE stocks. The move line and times are in
-IST. If NSE does not answer, the note gives the feed's address to open in a
+IST.
+
+Indian business media come in too (`--no-media` skips them):
+
+| source | how |
+| --- | --- |
+| Mint | its own RSS: `livemint.com/rss/markets`, `/rss/companies` |
+| The Economic Times | its own RSS: markets (`1977021501.cms`), stocks (`2146842.cms`) |
+| The Hindu BusinessLine | its own RSS: `/markets/feeder/default.rss`, `/companies/feeder/default.rss` |
+| Moneycontrol (and Mint) | one Google News RSS search per ticker, `site:moneycontrol.com OR site:livemint.com`; Moneycontrol's own feeds stopped updating in April 2024. Links are Google News links that open the story |
+
+A story is kept only when its headline or summary names the company (its
+name from `trader/universe-in.txt` without "Limited", or the symbol in
+capitals): being in a search result is not enough. The same story from two
+sources shows once. Business Standard refuses automated requests (HTTP 403)
+and is not used. Media stories are reporting and opinion, often with brokers'
+buy or sell calls in them: quote the outlet, never repeat a call as advice. If NSE does not answer, the note gives the feed's address to open in a
 browser. Offline: `nse-announcements.xml` and `nse-board-meetings.xml`.
 
 ## Steps

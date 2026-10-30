@@ -70,6 +70,31 @@ A level setup has no opening range to lean on, so it needs a stop you name.
   win or lose, no overnight hold. On a 1:00 p.m. early close it moves up to
   12:55. An entry at or after the flat-by time is refused.
 
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN` on
+any command. US stays the default and its output is unchanged. In India mode:
+times are IST (UTC+5:30, no daylight saving), the session is 9:15 AM to
+3:30 PM, the holiday list is NSE's 2026 capital-market list (nseindia.com,
+read 2026-10-30; 2027 is not published yet, so the tool says the calendar is
+unknown for 2027 dates), prices print in rupees (₹), and tickers are plain
+NSE symbols (RELIANCE, M&M, BAJAJ-AUTO) that the tool turns into Yahoo's
+`.NS` form itself. The Diwali Muhurat session is announced by NSE circular
+each year and is not in the calendar.
+
+- Stops round DOWN and targets round to NSE's tick for the price (circular
+  NSE/CMTR/67133, from April 15 2025): ₹0.01 under ₹250, ₹0.05 to
+  ₹1,000, ₹0.10 to ₹5,000, ₹0.50 to ₹10,000, ₹1 to ₹20,000,
+  ₹5 above. NSE fixes a stock's tick each month from last month's close;
+  the tool uses the entry price, so near a band edge check your broker's tick.
+- `flat_by` defaults to 15:10 IST: brokers square off intraday (MIS)
+  positions around 15:15 to 15:20 on their own. The plan carries
+  `"market": "IN"`, `"currency": "INR"` and `"tick"`.
+
+trader-budget, trader-risk, trader-news, trader-analyst, trader-pelosi and
+trader-broker are still US only: do not size, risk-check or place an NSE
+trade with them yet. Say so if the user tries.
+
 ## Steps
 
 1. Run it right after `/trader-entry` triggers. Before that, `--entry PRICE`

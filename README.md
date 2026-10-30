@@ -152,6 +152,16 @@ for the 60 days to October 19 2026, the 10:15 AM opening-range scan, Yahoo's
 TSLA headlines that morning, the House Clerk's 2026 index, real PTR text and
 real XBRL facts. They reproduce every number in the example above.
 
+## India (NSE)
+
+The chart scanner, entry timer, exit planner, time machine and price alerts
+also run on India's NSE: put `"market": "IN"` in `trader/config.json` (or pass
+`--market IN`). Times are IST, the session is 9:15 AM to 3:30 PM with NSE's
+2026 holidays, prices are in rupees, stops and targets land on NSE's tick for
+the price, and the flat-by time defaults to 3:10 PM, before brokers square off
+intraday positions. Budget, risk, news, the earnings analyst, the Pelosi
+tracker and the order executor are still US only.
+
 ## Fine print
 
 **Not financial advice.** This is software that reads public data and does

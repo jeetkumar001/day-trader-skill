@@ -450,5 +450,30 @@ class Cli(unittest.TestCase):
         self.assertIn("no rules", err)
 
 
+class India(unittest.TestCase):
+    def setUp(self):
+        alerts.use_market("IN")
+        self.addCleanup(alerts.use_market, "US")
+
+    def test_nse_clock(self):
+        st = alerts.market_status(alerts.parse_now("2026-10-30 11:40"))
+        self.assertEqual((st["open"], st["opens"], st["closes"], st["zone"]), (True, "09:15", "15:30", "IST"))
+        st = alerts.market_status(alerts.parse_now("2026-11-09 18:00"))
+        self.assertEqual(st["next_open"], "2026-11-11 09:15")  # Nov 10 is Diwali-Balipratipada
+
+    def test_plan_alerts_flat_by_and_rupees(self):
+        rules = alerts.rules_from_plan({"symbol": "BAJFINANCE", "stop": 934.85, "target": 951.8, "date": "2026-10-30"})
+        self.assertEqual(rules[2]["at"], "15:10")
+        st = alerts.market_status(alerts.parse_now("2026-10-30 11:40"))
+        rings, _ = alerts.evaluate(rules[:1], {"BAJFINANCE": {"price": 934.0}}, st, {},
+                                   alerts.parse_now("2026-10-30 11:40"))
+        self.assertEqual(rings[0]["message"], "BAJFINANCE is \u20b9934.00: at or below your stop \u20b9934.85 "
+                                              "(plan stop).")
+
+    def test_stooq_is_us_only(self):
+        with self.assertRaises(alerts.AlertError):
+            alerts.stooq_url("RELIANCE")
+
+
 if __name__ == "__main__":
     unittest.main()

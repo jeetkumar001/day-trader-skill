@@ -642,5 +642,67 @@ class Cli(unittest.TestCase):
         self.assertEqual(out["note"], "A scan is a list of charts that match a rule, not a list of stocks to buy.")
 
 
+NSE = os.path.join(SDIR, "nse")  # trimmed EQUITY_L.csv of Oct 30 2026, real BAJFINANCE.NS v8 fetched 11:55 IST
+
+
+class India(unittest.TestCase):
+    def setUp(self):
+        scan.use_market("IN")
+        self.addCleanup(scan.use_market, "US")
+
+    def test_ist_is_a_fixed_offset_and_nse_hours(self):
+        self.assertEqual(scan.ts_to_eastern(1793331900), DT(2026, 10, 30, 9, 15))   # BAJFINANCE's first bar
+        self.assertEqual(scan.eastern_to_utc(DT(2026, 3, 8, 9, 15)), DT(2026, 3, 8, 3, 45))  # no DST in India
+        self.assertEqual(scan.session(D(2026, 10, 30)), (datetime.time(9, 15), datetime.time(15, 30)))
+        self.assertEqual(scan.trading_day(D(2026, 11, 10)), (False, "NSE holiday: Diwali-Balipratipada"))
+        self.assertEqual(scan.trading_day(D(2026, 11, 26)), (True, ""))  # Thanksgiving trades in Mumbai
+        self.assertEqual(len(scan.NSE_HOLIDAYS), 16)  # the weekday ones of NSE's 20 for 2026
+
+    def test_universe_keeps_the_eq_series(self):
+        with open(os.path.join(NSE, "EQUITY_L.csv"), encoding="utf-8") as fh:
+            kept, counts, _ = scan.build_nse_universe(fh.read())
+        self.assertEqual([k for k, _ in kept], ["ASAHIINDIA", "BAJAJ-AUTO", "M&M", "RELIANCE", "TCS"])
+        self.assertEqual(counts["BE series (no intraday)"], 2)
+        self.assertEqual(counts["BZ series (no intraday)"], 1)
+        with self.assertRaises(scan.ScanError):
+            scan.build_nse_universe("Symbol|Security Name\nAAPL|Apple\n")
+
+    def test_yahoo_symbols(self):
+        self.assertEqual(scan.to_yahoo("M&M"), "M&M.NS")
+        self.assertEqual(scan.from_yahoo("BAJAJ-AUTO.NS"), "BAJAJ-AUTO")
+        self.assertIn("symbols=M%26M.NS,BAJAJ-AUTO.NS&", scan.spark_path(["M&M", "BAJAJ-AUTO"], "1d", "5m"))
+
+    def test_universe_command_offline(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        out = os.path.join(d, "u.txt")
+        code, text, _ = run(["universe", "--market", "IN", "--offline", NSE, "--out", out])
+        self.assertEqual(code, 0)
+        self.assertIn("Kept 5 NSE equities in the EQ series.", text)
+        with open(out, encoding="utf-8") as fh:
+            self.assertIn("M&M|Mahindra & Mahindra Limited\n", fh.read())
+
+    def test_orb_on_a_real_nse_morning(self):
+        code, text, _ = run(["orb", "--market", "IN", "--offline", os.path.join(NSE, "BAJFINANCE.json"),
+                             "--now", "2026-10-30 10:00", "--no-write", "--json"])
+        self.assertEqual(code, 0)
+        out = json.loads(text)
+        self.assertEqual((out["market"], out["as_of"]), ("IN", "2026-10-30 10:00 IST"))
+        h = out["hits"][0]
+        self.assertEqual((h["symbol"], h["at"], h["price"], h["or_low"], h["or_high"]),
+                         ("BAJFINANCE", "9:35 AM", 940.5, 932.05, 937.7))
+
+    def test_orb_before_the_range_says_so_in_ist(self):
+        code, _, err = run(["orb", "--market", "IN", "--offline", os.path.join(NSE, "BAJFINANCE.json"),
+                            "--now", "2026-10-30 09:25", "--no-write"])
+        self.assertEqual(code, 1)
+        self.assertIn("It is 9:25 AM IST: the 15-minute opening range runs 9:15 to 9:30 AM", err)
+
+    def test_bad_market(self):
+        code, _, err = run(["daily", "--market", "JP", "--symbols", "X"])
+        self.assertEqual(code, 1)
+        self.assertIn("market wants US or IN", err)
+
+
 if __name__ == "__main__":
     unittest.main()

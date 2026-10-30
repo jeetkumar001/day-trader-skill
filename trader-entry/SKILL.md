@@ -73,6 +73,25 @@ day bar by bar without waiting.
   triggered, expired, or no data. Before 9:30: not open yet. Before 9:45: the
   range is still forming. Weekends and NYSE holidays: the market is closed.
 
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN` on
+any command. US stays the default and its output is unchanged. In India mode:
+times are IST (UTC+5:30, no daylight saving), the session is 9:15 AM to
+3:30 PM, the holiday list is NSE's 2026 capital-market list (nseindia.com,
+read 2026-10-30; 2027 is not published yet, so the tool says the calendar is
+unknown for 2027 dates), prices print in rupees (₹), and tickers are plain
+NSE symbols (RELIANCE, M&M, BAJAJ-AUTO) that the tool turns into Yahoo's
+`.NS` form itself. The Diwali Muhurat session is announced by NSE circular
+each year and is not in the calendar.
+
+- Defaults: `no_entries_before` 09:30 (the end of a 15-minute range) and
+  `no_entries_after` 14:30, IST. trader/entry.json carries `"market": "IN"`.
+
+trader-budget, trader-risk, trader-news, trader-analyst, trader-pelosi and
+trader-broker are still US only: do not size, risk-check or place an NSE
+trade with them yet. Say so if the user tries.
+
 ## Steps
 
 1. Get the symbol from the user, or run `entry.py watchlist` after

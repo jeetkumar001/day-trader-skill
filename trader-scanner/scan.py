@@ -77,12 +77,16 @@ import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 UA = "Mozilla/5.0 (compatible; day-trader-skill/2.0; +https://github.com/Jakeschincariol/day-trader-skill)"
 YAHOO_HOSTS = ("https://query2.finance.yahoo.com", "https://query1.finance.yahoo.com")
 NASDAQ_FILES = ("nasdaqlisted.txt", "otherlisted.txt")
 NASDAQ_URL = "https://www.nasdaqtrader.com/dynamic/SymDir/"
+NSE_FILE = "EQUITY_L.csv"
+NSE_URL = "https://nsearchives.nseindia.com/content/equities/"
+NSE_SERIES = ("EQ",)  # BE / BZ trade for trade: delivery only, no intraday trading
 SPARK_MAX = 20      # Yahoo's spark answers 400 above 20 symbols
 PAUSE = 0.3         # seconds between requests: be polite to free endpoints
 BACKOFF = 5.0       # seconds to wait before the one retry after a 429
@@ -120,10 +124,53 @@ NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET
     "2026-12-24": "Christmas Eve",
     "2027-11-26": "day after Thanksgiving",
 }
-CALENDAR_YEARS = (2026, 2027)
-OPEN = datetime.time(9, 30)
-CLOSE = datetime.time(16, 0)
-EARLY = datetime.time(13, 0)
+NSE_HOLIDAYS = {  # NSE capital market trading holidays (nseindia.com holiday-master, read 2026-10-30)
+    "2026-01-15": "Municipal Corporation Election - Maharashtra",
+    "2026-01-26": "Republic Day",
+    "2026-03-03": "Holi",
+    "2026-03-26": "Shri Ram Navami",
+    "2026-03-31": "Shri Mahavir Jayanti",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-05-28": "Bakri Id",
+    "2026-06-26": "Muharram",
+    "2026-09-14": "Ganesh Chaturthi",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-11-10": "Diwali-Balipratipada",
+    "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
+    "2026-12-25": "Christmas",
+}
+# One row per market. utc_offset None = New York's DST rule; a number = a fixed offset in hours.
+MARKETS = {
+    "US": {"code": "US", "exchange": "NYSE", "zone": "ET", "utc_offset": None,
+           "open": datetime.time(9, 30), "close": datetime.time(16, 0), "early": datetime.time(13, 0),
+           "holidays": NYSE_HOLIDAYS, "early_close": NYSE_EARLY_CLOSE, "years": (2026, 2027),
+           "calendar_site": "nyse.com", "suffix": "", "currency": "$", "min_price": 5.0,
+           "min_volume": 1000000, "no_entries_after": "15:30", "universe": "trader/universe.txt"},
+    "IN": {"code": "IN", "exchange": "NSE", "zone": "IST", "utc_offset": 5.5,
+           "open": datetime.time(9, 15), "close": datetime.time(15, 30), "early": None,
+           "holidays": NSE_HOLIDAYS, "early_close": {}, "years": (2026,),
+           "calendar_site": "nseindia.com", "suffix": ".NS", "currency": "\u20b9", "min_price": 20.0,
+           "min_volume": 500000, "no_entries_after": "14:30", "universe": "trader/universe-in.txt"},
+}
+MARKET = MARKETS["US"]
+CALENDAR_YEARS = MARKET["years"]
+OPEN = MARKET["open"]
+CLOSE = MARKET["close"]
+EARLY = MARKET["early"]
+
+
+def use_market(code):
+    """Switch every clock, calendar and symbol rule to one market: "US" (default) or "IN" (NSE)."""
+    global MARKET, CALENDAR_YEARS, OPEN, CLOSE, EARLY
+    key = (code or "US").strip().upper()
+    if key not in MARKETS:
+        raise ScanError("market wants US or IN, not %r" % code)
+    MARKET = MARKETS[key]
+    CALENDAR_YEARS, OPEN, CLOSE, EARLY = MARKET["years"], MARKET["open"], MARKET["close"], MARKET["early"]
+    return MARKET
 
 SETUPS = [
     ("breakout_20d", "20-day closing-high breakout"),
@@ -158,11 +205,20 @@ def eastern_offset(utc):
     return -4 if start <= naive < end else -5
 
 
+def local_offset(utc):
+    """Hours from UTC for the market's exchange: New York's DST rule, or a fixed offset (IST +5:30)."""
+    off = MARKET["utc_offset"]
+    return eastern_offset(utc) if off is None else off
+
+
 def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+    """UTC -> naive exchange time (New York for US, India for IN). The name is kept from v2."""
+    return utc.replace(tzinfo=None) + datetime.timedelta(hours=local_offset(utc))
 
 
 def eastern_to_utc(local):
+    if MARKET["utc_offset"] is not None:
+        return local - datetime.timedelta(hours=MARKET["utc_offset"])
     for off in (-4, -5):
         utc = local - datetime.timedelta(hours=off)
         if eastern_offset(utc) == off:
@@ -171,19 +227,19 @@ def eastern_to_utc(local):
 
 
 def ts_to_eastern(ts):
-    """Unix seconds -> naive New York time. Never uses the machine's time zone."""
+    """Unix seconds -> naive exchange time. Never uses the machine's time zone."""
     return to_eastern(datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=int(ts)))
 
 
 def parse_now(text):
-    """ISO time -> naive UTC. A time without an offset is taken as New York time."""
+    """ISO time -> naive UTC. A time without an offset is taken as exchange time."""
     if not text:
         return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
     t = text.strip().replace("Z", "+00:00")
     try:
         dt = datetime.datetime.fromisoformat(t)
     except ValueError:
-        raise ScanError('--now wants a time like "2026-10-19 10:15" (New York) or ...Z (UTC)')
+        raise ScanError('--now wants a time like "2026-10-19 10:15" (exchange time) or ...Z (UTC)')
     if dt.tzinfo is None:
         return eastern_to_utc(dt)
     return (dt - dt.utcoffset()).replace(tzinfo=None)
@@ -192,7 +248,7 @@ def parse_now(text):
 def parse_hhmm(text, flag="--at"):
     m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", text or "")
     if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
-        raise ScanError("%s wants a New York time like 10:15" % flag)
+        raise ScanError("%s wants an exchange time like 10:15" % flag)
     return datetime.time(int(m.group(1)), int(m.group(2)))
 
 
@@ -200,9 +256,9 @@ def trading_day(d):
     """(is_trading_day, reason). Weekends and the NYSE holiday list."""
     if d.weekday() >= 5:
         return False, "weekend"
-    name = NYSE_HOLIDAYS.get(d.isoformat())
+    name = MARKET["holidays"].get(d.isoformat())
     if name:
-        return False, "NYSE holiday: " + name
+        return False, "%s holiday: %s" % (MARKET["exchange"], name)
     return True, ""
 
 
@@ -211,7 +267,7 @@ def session(d):
     ok, _ = trading_day(d)
     if not ok:
         return None
-    return OPEN, (EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE)
+    return OPEN, (EARLY if d.isoformat() in MARKET["early_close"] else CLOSE)
 
 
 def clock_label(t):
@@ -268,16 +324,27 @@ def yahoo_get(path):
 
 
 def to_yahoo(sym):
+    """Our ticker -> Yahoo's: BRK.B -> BRK-B (US), RELIANCE -> RELIANCE.NS (IN)."""
+    if MARKET["suffix"]:
+        return sym.upper() + MARKET["suffix"]
     return sym.upper().replace(".", "-")
+
+
+def from_yahoo(ysym):
+    ysym = ysym.upper()
+    if MARKET["suffix"]:
+        return ysym[:-len(MARKET["suffix"])] if ysym.endswith(MARKET["suffix"]) else ysym
+    return ysym.replace("-", ".")
 
 
 def spark_path(symbols, rng, interval):
     return "/v7/finance/spark?symbols=%s&range=%s&interval=%s" % (
-        ",".join(to_yahoo(s) for s in symbols), rng, interval)
+        ",".join(urllib.parse.quote(to_yahoo(s), safe="-.^") for s in symbols), rng, interval)
 
 
 def chart_path(sym, rng, interval):
-    return "/v8/finance/chart/%s?range=%s&interval=%s" % (to_yahoo(sym), rng, interval)
+    return "/v8/finance/chart/%s?range=%s&interval=%s" % (urllib.parse.quote(to_yahoo(sym), safe="-.^"), rng,
+                                                           interval)
 
 
 # ---------------------------------------------------------------- parsing
@@ -309,7 +376,7 @@ def parse_spark(text_or_doc, wanted=None):
         if not resp:
             continue
         ysym = item.get("symbol") or (resp[0].get("meta") or {}).get("symbol") or ""
-        sym = (wanted or {}).get(ysym.upper(), ysym.upper().replace("-", "."))
+        sym = (wanted or {}).get(ysym.upper(), from_yahoo(ysym))
         out[sym] = series_from_result(resp[0])
     if err and not out:
         raise ScanError("Yahoo spark: %s" % (err.get("description") or err.get("code") or err))
@@ -356,7 +423,7 @@ def _absorb(doc, name_hint, data, errors):
                 sym = (doc["chart"].get("result") or [{}])[0]["meta"]["symbol"]
             except (AttributeError, KeyError, TypeError, IndexError):
                 raise ScanError("an offline v8 chart without a symbol: name the file <TICKER>.json")
-        sym = sym.upper().replace("-", ".")
+        sym = from_yahoo(sym)
         try:
             data[sym] = parse_chart(doc, sym)
         except ScanError as e:
@@ -460,6 +527,25 @@ def parse_symdir(text):
             continue
         rows.append(dict(zip(hdr, ln.split("|"))))
     return rows, created
+
+
+def build_nse_universe(text):
+    """NSE's EQUITY_L.csv -> (kept [(SYM, name)], counts, None). Keeps the EQ series only."""
+    import csv
+    rows = list(csv.reader(text.replace("\r", "").splitlines()))
+    if not rows or [h.strip() for h in rows[0]][:3] != ["SYMBOL", "NAME OF COMPANY", "SERIES"]:
+        raise ScanError("not NSE's %s (header %s)" % (NSE_FILE, ",".join(rows[0])[:60] if rows else "empty"))
+    kept, counts = {}, {"rows": 0}
+    for r in rows[1:]:
+        if len(r) < 3 or not r[0].strip():
+            continue
+        counts["rows"] += 1
+        series = r[2].strip()
+        why = "keep" if series in NSE_SERIES else "%s series (no intraday)" % (series or "no")
+        counts[why] = counts.get(why, 0) + 1
+        if why == "keep":
+            kept[r[0].strip().upper()] = " ".join(r[1].split())
+    return sorted(kept.items()), counts, None
 
 
 def build_universe(texts):
@@ -661,24 +747,25 @@ def orb_window(now_utc, at, or_minutes, until, explicit_day=None):
     if at is not None:
         cutoff = datetime.datetime.combine(day, at)
         if explicit_day is None and cutoff > now + datetime.timedelta(seconds=59):
-            raise ScanError("--at %s is later than now (%s ET)." % (at.strftime("%H:%M"), clock_label(now)))
+            raise ScanError("--at %s is later than now (%s %s)." % (at.strftime("%H:%M"), clock_label(now),
+                                                                     MARKET["zone"]))
         if cutoff > close_dt:
             raise ScanError("--at %s is after the %s close on %s." % (at.strftime("%H:%M"), clock_label(close_dt),
                                                                        day_label(day)))
     else:
         cutoff = now.replace(second=0, microsecond=0)
         if cutoff >= close_dt:
-            raise ScanError("The market closed at %s ET on %s. Replay the session with --at 10:15."
-                            % (clock_label(close_dt), day_label(day)))
+            raise ScanError("The market closed at %s %s on %s. Replay the session with --at 10:15."
+                            % (clock_label(close_dt), MARKET["zone"], day_label(day)))
     if cutoff < first_close:
-        raise ScanError("It is %s ET: the %d-minute opening range runs 9:30 to %s and the first bar after it "
+        raise ScanError("It is %s %s: the %d-minute opening range runs %s to %s and the first bar after it "
                         "closes at %s. Run orb again after %s."
-                        % (clock_label(cutoff), or_minutes, clock_label(range_end), clock_label(first_close),
-                           clock_label(first_close)))
+                        % (clock_label(cutoff), MARKET["zone"], or_minutes, clock_label(OPEN).replace(" AM", ""),
+                           clock_label(range_end), clock_label(first_close), clock_label(first_close)))
     if until is not None and cutoff.time() > until:
-        raise ScanError("It is %s ET, after %s, your last time for new entries (no_entries_after): an "
+        raise ScanError("It is %s %s, after %s, your last time for new entries (no_entries_after): an "
                         "opening-range breakout found now is expired. Run orb tomorrow after %s, or replay "
-                        "today with --at 10:15." % (clock_label(cutoff), until.strftime("%H:%M"),
+                        "today with --at 10:15." % (clock_label(cutoff), MARKET["zone"], until.strftime("%H:%M"),
                                                       clock_label(first_close)))
     return day, cutoff
 
@@ -776,9 +863,10 @@ def read_symbols(a, offline_syms=None):
     elif offline_syms is not None and not a.universe:
         syms = sorted(offline_syms)  # offline: every chart in the file, unless a list was given
     else:
-        path = a.universe or DEFAULT_UNIVERSE
+        path = a.universe or MARKET["universe"]
         if not os.path.exists(path):
-            raise ScanError("no %s yet: run `scan.py universe` first, or pass --symbols" % path)
+            raise ScanError("no %s yet: run `scan.py universe%s` first, or pass --symbols"
+                            % (path, "" if MARKET["code"] == "US" else " --market " + MARKET["code"]))
         syms = symbols_from_file(path)
     out = []
     for s in syms:
@@ -832,14 +920,32 @@ def write_json(path, doc):
 
 
 def money(x):
-    return "${:,.2f}".format(x)
+    return MARKET["currency"] + "{:,.2f}".format(x)
 
 
 # ---------------------------------------------------------------- commands
 
+def fetch_nse_list(a):
+    if a.offline:
+        p = os.path.join(a.offline, NSE_FILE) if os.path.isdir(a.offline) else a.offline
+        if not os.path.exists(p):
+            raise ScanError("no %s at %s" % (NSE_FILE, a.offline))
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    try:
+        return http_get(NSE_URL + NSE_FILE, timeout=60)
+    except (urllib.error.URLError, OSError) as e:
+        raise ScanError("nseindia.com did not answer (%s). Open %s%s in your browser, save it, and run "
+                        "`scan.py universe --market IN --offline <the saved file>`."
+                        % (getattr(e, "reason", None) or getattr(e, "code", None) or e, NSE_URL, NSE_FILE))
+
+
 def cmd_universe(a):
     t0 = time.time()
     texts = {}
+    if MARKET["code"] == "IN":
+        kept, counts, created = build_nse_universe(fetch_nse_list(a))
+        return report_universe(a, t0, kept, counts, created)
     for k, fname in enumerate(NASDAQ_FILES):
         if a.offline:
             p = os.path.join(a.offline, fname)
@@ -857,6 +963,10 @@ def cmd_universe(a):
             except (urllib.error.URLError, OSError) as e:
                 raise ScanError("could not reach nasdaqtrader.com: %s" % getattr(e, "reason", e))
     kept, counts, created = build_universe(texts)
+    return report_universe(a, t0, kept, counts, created)
+
+
+def report_universe(a, t0, kept, counts, created):
     if not a.no_write:
         d = os.path.dirname(a.out)
         if d:
@@ -870,9 +980,13 @@ def cmd_universe(a):
                           "dropped": dropped, "out": None if a.no_write else a.out,
                           "seconds": round(time.time() - t0, 1)}, indent=2))
     else:
-        print("Nasdaq Trader symbol directories%s: %s rows." % (
-            (", files of %s ET" % created) if created else "", "{:,}".format(counts.get("rows", 0))))
-        print("Kept %s US-listed common stocks, ordinary shares and ADRs." % "{:,}".format(len(kept)))
+        if MARKET["code"] == "IN":
+            print("NSE securities list (%s): %s rows." % (NSE_FILE, "{:,}".format(counts.get("rows", 0))))
+            print("Kept %s NSE equities in the EQ series." % "{:,}".format(len(kept)))
+        else:
+            print("Nasdaq Trader symbol directories%s: %s rows." % (
+                (", files of %s ET" % created) if created else "", "{:,}".format(counts.get("rows", 0))))
+            print("Kept %s US-listed common stocks, ordinary shares and ADRs." % "{:,}".format(len(kept)))
         print("Dropped: " + ", ".join("%s %s" % ("{:,}".format(v), k)
                                       for k, v in sorted(dropped.items(), key=lambda kv: -kv[1])) + ".")
         if not a.no_write:
@@ -896,6 +1010,7 @@ def cmd_daily(a):
     nfailed = len(symbols) - counts["fetched"]
     as_of = ("%s close" % last_date.isoformat()) if last_date else None
     doc = {"created_by": "trader-scanner", "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "daily",
+           "market": MARKET["code"],
            "as_of": as_of, "universe": len(symbols), "scanned": counts["scanned"], "failed": nfailed,
            "source": "yahoo", "filters": {"min_price": a.min_price, "min_volume": a.min_volume},
            "note": NOTE, "hits": hits}
@@ -907,12 +1022,13 @@ def cmd_daily(a):
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2))
         return 0 if hits else 1
     local = to_eastern(now)
-    print("Daily scan, %s ET, closes through %s (Yahoo spark, daily closes only)." % (
-        local.strftime("%a %Y-%m-%d %H:%M"), last_date.isoformat() if last_date else "nothing"))
-    print("Fetched %s of %s charts%s. %s passed the liquidity filter ($%s+ and %s+ shares)%s; "
+    print("Daily scan%s, %s %s, closes through %s (Yahoo spark, daily closes only)." % (
+        "" if MARKET["code"] == "US" else " (%s)" % MARKET["exchange"], local.strftime("%a %Y-%m-%d %H:%M"),
+        MARKET["zone"], last_date.isoformat() if last_date else "nothing"))
+    print("Fetched %s of %s charts%s. %s passed the liquidity filter (%s%s+ and %s+ shares)%s; "
           "%s scanned." % ("{:,}".format(counts["fetched"]), "{:,}".format(len(symbols)),
                            (" (%s failed or had no data)" % "{:,}".format(nfailed)) if nfailed else "",
-                           "{:,}".format(counts["fetched"] - counts["illiquid"]), _n(a.min_price),
+                           "{:,}".format(counts["fetched"] - counts["illiquid"]), MARKET["currency"], _n(a.min_price),
                            "{:,}".format(a.min_volume),
                            (", %d had under %d days" % (counts["short"], MIN_DAILY_BARS)) if counts["short"] else "",
                            "{:,}".format(counts["scanned"])))
@@ -924,7 +1040,7 @@ def cmd_daily(a):
     else:
         print("No setups.")
     for h in hits[:a.show]:
-        print("  %-6s %10s  RSI %5.1f  %s" % (h["symbol"], money(h["price"]), h["rsi"],
+        print("  %-*s %10s  RSI %5.1f  %s" % (sym_width(), h["symbol"], money(h["price"]), h["rsi"],
                                               ", ".join(LABEL[t] for t in h["setups"])))
     if len(hits) > a.show:
         print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
@@ -932,6 +1048,10 @@ def cmd_daily(a):
         print("Wrote %s (mode daily, %d hit%s)." % (a.out, len(hits), "" if len(hits) == 1 else "s"))
     print(NOTE + " Next: pick one chart, then /trader-news TICKER.")
     return 0 if hits else 1
+
+
+def sym_width():
+    return 6 if MARKET["code"] == "US" else 10  # NSE symbols run to 10 letters (ASAHIINDIA)
 
 
 def _n(x):
@@ -944,7 +1064,7 @@ def cmd_orb(a):
     now = parse_now(a.now)
     at = parse_hhmm(a.at) if a.at else None
     cfg = read_config(a.config)
-    until = parse_hhmm(a.until or cfg.get("no_entries_after") or "15:30", "--until")
+    until = parse_hhmm(a.until or cfg.get("no_entries_after") or MARKET["no_entries_after"], "--until")
     data = failed = None
     explicit_day = None
     offline_syms = None
@@ -982,8 +1102,9 @@ def cmd_orb(a):
     failed = dict(failed or {})
     failed.update(failed2)
     nfailed = len([s for s in symbols if s in failed])
-    as_of = "%s %s ET" % (day.isoformat(), cutoff.strftime("%H:%M"))
+    as_of = "%s %s %s" % (day.isoformat(), cutoff.strftime("%H:%M"), MARKET["zone"])
     doc = {"created_by": "trader-scanner", "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "mode": "orb",
+           "market": MARKET["code"],
            "as_of": as_of, "universe": len(symbols), "scanned": counts["scanned"], "failed": nfailed,
            "unconfirmed": counts["unconfirmed"], "source": "yahoo", "or_minutes": a.or_minutes,
            "interval": "%dm" % BAR_MIN,
@@ -995,8 +1116,10 @@ def cmd_orb(a):
     if a.json:
         print(json.dumps(dict(doc, counts=counts, seconds=round(time.time() - t0, 1)), indent=2))
         return 0 if hits else 1
-    print("Opening-range breakout scan, %s %s ET: %d-minute range (9:30 to %s), 5-minute bars, Yahoo."
-          % (day_label(day), clock_label(cutoff), a.or_minutes, clock_label(slot(day, a.or_minutes // BAR_MIN))))
+    print("Opening-range breakout scan%s, %s %s %s: %d-minute range (%s to %s), 5-minute bars, Yahoo."
+          % ("" if MARKET["code"] == "US" else " (%s)" % MARKET["exchange"], day_label(day), clock_label(cutoff),
+             MARKET["zone"], a.or_minutes, clock_label(OPEN).replace(" AM", ""),
+             clock_label(slot(day, a.or_minutes // BAR_MIN))))
     print("Fetched %s of %s charts%s; %s usable%s; %s candidates, %s confirmed with real highs and lows."
           % ("{:,}".format(counts["fetched"]), "{:,}".format(len(symbols)),
              (" (%s failed or had no data)" % "{:,}".format(nfailed)) if nfailed else "",
@@ -1011,8 +1134,9 @@ def cmd_orb(a):
               % (len(hits), ("the %s checked" % "{:,}".format(counts["confirmed"])) if counts["unconfirmed"]
                  else "{:,}".format(counts["scanned"]), clock_label(cutoff)))
         for h in hits[:a.show]:
-            print("  %8s  %-6s %10s  range %s to %s  %+.2f%% over" % (
-                h["at"], h["symbol"], money(h["price"]), _p(h["or_low"]), _p(h["or_high"]), h["pct_over"]))
+            print("  %8s  %-*s %10s  range %s to %s  %+.2f%% over" % (
+                h["at"], sym_width(), h["symbol"], money(h["price"]), _p(h["or_low"]), _p(h["or_high"]),
+                h["pct_over"]))
         if len(hits) > a.show:
             print("  ... and %d more in the watchlist (--show N for more)." % (len(hits) - a.show))
     else:
@@ -1032,8 +1156,10 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser("universe", help="download Nasdaq Trader's lists -> trader/universe.txt")
-    p.add_argument("--out", default=DEFAULT_UNIVERSE)
-    p.add_argument("--offline", metavar="DIR", help="a folder with nasdaqlisted.txt and otherlisted.txt")
+    p.add_argument("--out", help="default %s (US), %s (IN)" % (DEFAULT_UNIVERSE, MARKETS["IN"]["universe"]))
+    p.add_argument("--offline", metavar="PATH", help="a folder with nasdaqlisted.txt and otherlisted.txt "
+                                                      "(US), or NSE's EQUITY_L.csv (IN)")
+    p.add_argument("--market", help="US (default) or IN (NSE); else \"market\" in trader/config.json")
     p.add_argument("--no-write", action="store_true")
     p.add_argument("--pause", type=float, default=PAUSE)
     p.add_argument("--json", action="store_true")
@@ -1043,9 +1169,12 @@ def main(argv=None):
         g.add_argument("--symbols", help="comma-separated tickers instead of the universe")
         g.add_argument("--watchlist", metavar="FILE", help="a watchlist.json (hits) or a text file of tickers")
         p.add_argument("--universe", help="symbol list, one SYMBOL|Name a line (default %s)" % DEFAULT_UNIVERSE)
+        p.add_argument("--market", help="US (default) or IN (NSE); else \"market\" in trader/config.json")
         p.add_argument("--limit", type=int, help="scan only the first N symbols")
-        p.add_argument("--min-price", type=float, default=min_price)
-        p.add_argument("--min-volume", type=int, default=min_volume)
+        p.add_argument("--min-price", type=float, help="default %s (US), %s (IN)"
+                       % (_n(min_price), _n(MARKETS["IN"]["min_price"])))
+        p.add_argument("--min-volume", type=int, help="default {:,} (US), {:,} (IN)".format(
+            min_volume, MARKETS["IN"]["min_volume"] if min_volume else 0))
         p.add_argument("--offline", metavar="PATH", help="fixture folder or file instead of the network")
         p.add_argument("--now", help='pretend it is this time ("2026-10-19 10:15" New York, or ...Z)')
         p.add_argument("--out", default="trader/watchlist.json")
@@ -1070,6 +1199,14 @@ def main(argv=None):
         ap.print_help()
         return 1
     try:
+        use_market(a.market or read_config(getattr(a, "config", None) or "trader/config.json").get("market"))
+        if a.cmd == "universe" and not a.out:
+            a.out = MARKET["universe"]
+        if a.cmd != "universe":
+            if a.min_price is None:
+                a.min_price = MARKET["min_price"]
+            if a.min_volume is None:
+                a.min_volume = MARKET["min_volume"] if a.cmd == "daily" else 0
         return {"universe": cmd_universe, "daily": cmd_daily, "orb": cmd_orb}[a.cmd](a)
     except ScanError as e:
         print("scan.py: %s" % e, file=sys.stderr)

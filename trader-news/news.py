@@ -52,7 +52,11 @@ Indian business media (India mode; --no-media skips them):
     RSS feeds stopped updating in April 2024). Links are Google News links
     that open the story.
   A media story is kept only when its headline or summary names the company
-  (or the symbol in capitals): a search hit alone is not enough.
+  (or the symbol in capitals): a search hit alone is not enough. Quote,
+  listing and "trending stocks" pages are dropped. Symbols that are also market
+  words (BSE, NSE, MCX, IDEA...) count only as "BSE Ltd", "BSE shares" or
+  "NSE: BSE". Yahoo's .NS headlines are kept only when they name the company too.
+  An NSE feed that does not answer gets one slower retry; a refusal never does.
 
 Times print in IST. Offline names: nse-announcements.xml, nse-board-meetings.xml,
 mint-markets.xml, mint-companies.xml, et-markets.xml, et-stocks.xml,
@@ -109,6 +113,17 @@ NSE_IMPORTANT = re.compile(r"financial result|outcome of board meeting|resignati
                            r"suspension|delisting|credit rating|search|penalt|show cause|litigation|"
                            r"acquisition|scheme of arrangement|buy ?back|fund raising", re.I)
 NSE_SKIP = re.compile(r"declaration of NAV", re.I)   # mutual fund prices, not company news
+# NSE symbols that are also everyday market words: "BSE" in a headline is nearly always the
+# exchange. For these only "BSE Ltd", "BSE shares", "NSE: BSE" and the like name the stock.
+AMBIGUOUS_SYMBOLS = {"BSE", "NSE", "MCX", "IDEA", "GOLD", "SILVER", "POWER", "STEEL", "BANK",
+                     "INDIA", "HOME", "ONE"}
+STOCK_WORDS = r"(?i:Ltd\b|Limited\b|shares?\b|stock\b|share price\b|Q[1-4]\b)"
+# Media items that are quote, listing or index pages, not stories (seen live on 2026-10-30)
+MEDIA_JUNK = re.compile(r"live (?:nse|bse)\s*/\s*(?:nse|bse)|listing details|f&o quote|bids offers|"
+                        r"(?:most visited|most followed|volatile|trending) stocks today|"
+                        r"^share/stock market news|corporate relationship department|"
+                        r"share price (?:highlights|live updates)|stock price history", re.I)
+QUOTE_PAGE = re.compile(r"^(?:\S+\s+){0,5}(?:Ltd|Limited)\.?$")   # "Trent Ltd.", "COFORGE Ltd."
 MARKETS = {
     "US": {"code": "US", "exchange": "NYSE", "zone": "ET", "utc_offset": None, "suffix": "",
            "yahoo": "https://feeds.finance.yahoo.com/rss/2.0/headline?s=%s&region=US&lang=en-US"},
@@ -241,7 +256,7 @@ class Fetcher(object):
         self.pause = pause
         self._last = 0.0
 
-    def get(self, url, name, sec=False, ua=None):
+    def get(self, url, name, sec=False, ua=None, timeout=30):
         if self.offline:
             path = os.path.join(self.offline, name)
             if not os.path.isfile(path):
@@ -257,7 +272,7 @@ class Fetcher(object):
         headers = {"User-Agent": self.sec_ua if sec else (ua or BROWSER_UA), "Accept-Encoding": "gzip"}
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = resp.read()
                 if resp.headers.get("Content-Encoding") == "gzip":
                     data = gzip.decompress(data)
@@ -480,7 +495,7 @@ def parse_media_rss(data, watch, source=None, ticker=None):
             src = media_source((el.text or "") + " " + (el.get("url", "") if el is not None else "")) \
                 if el is not None else None
             title = re.sub(r"\s+-\s+[^-]*$", "", title).strip()   # Google adds " - Livemint"
-        if not src or not title:
+        if not src or not title or is_quote_page(title):
             continue
         summary = re.sub(r"<[^>]+>", " ", _text(it, "description"))
         summary = "" if source is None else re.sub(r"\s+", " ", summary).strip()
@@ -495,9 +510,22 @@ def parse_media_rss(data, watch, source=None, ticker=None):
     return out
 
 
+def is_quote_page(title):
+    """A quote, listing or "trending stocks" page rather than a story."""
+    return bool(MEDIA_JUNK.search(title) or QUOTE_PAGE.match(title.strip()))
+
+
+def ambiguous(ticker, name=None):
+    """An NSE symbol (and name) that is also a market word, like BSE."""
+    return (MARKET["code"] == "IN" and ticker in AMBIGUOUS_SYMBOLS
+            and (not name or name.upper() == ticker))
+
+
 def gnews_url(name, ticker, hours):
     days = max(1, int(-(-hours // 24)))
     who = '"%s"' % (name or ticker)
+    if ambiguous(ticker, name):
+        who = '("%s Ltd" OR "%s shares")' % (ticker, ticker)
     q = "%s (%s) when:%dd" % (who, " OR ".join("site:" + s for s in MEDIA_SITES), days)
     return GNEWS % urllib.parse.quote(q)
 
@@ -543,10 +571,13 @@ def mention_patterns(watch):
     for t, name in watch.items():
         alts = [r"\(%s\)" % re.escape(t), r"\$%s\b" % re.escape(t),
                 r"\b(?:NYSE|NASDAQ|Nasdaq|NSE|BSE)\s*:\s*%s\b" % re.escape(t)]
-        if name and len(name) >= 4:
-            alts.append(r"\b%s\b" % re.escape(name).replace(r"\ ", r"[\s-]"))
-        if MARKET["code"] == "IN" and len(t) >= 3:
-            alts.append(r"(?<![\w&-])%s(?![\w&-])" % re.escape(t))   # NSE headlines use symbols: "NALCO shares"
+        if ambiguous(t, name):   # "BSE" alone is the exchange: want "BSE Ltd", "BSE shares"
+            alts.append(r"(?<![\w&-])%s\s+%s" % (re.escape(t), STOCK_WORDS))
+        else:
+            if name and len(name) >= 4:
+                alts.append(r"\b%s\b" % re.escape(name).replace(r"\ ", r"[\s-]"))
+            if MARKET["code"] == "IN" and len(t) >= 3:
+                alts.append(r"(?<![\w&-])%s(?![\w&-])" % re.escape(t))   # headlines use symbols: "NALCO shares"
         pats[t] = re.compile("|".join(alts))
     return pats
 
@@ -598,17 +629,23 @@ def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=No
             media=True, hours=48):
     errors = [] if errors is None else errors
     items = []
+    india = MARKET["code"] == "IN"
+    pats = mention_patterns(watch) if india else {}
     for t in sorted(watch):
         try:
-            items += parse_rss(fetcher.get(MARKET["yahoo"] % yahoo_symbol(t), "yahoo-%s.xml" % t), t)
+            got = parse_rss(fetcher.get(MARKET["yahoo"] % yahoo_symbol(t), "yahoo-%s.xml" % t), t)
         except NewsError as exc:
-            if not (MARKET["code"] == "IN" and fetcher.offline and "no file" in str(exc)):
+            if not (india and fetcher.offline and "no file" in str(exc)):
                 errors.append("headlines for %s: %s" % (t, exc))
-    if MARKET["code"] == "IN":
+            continue
+        if india:   # Yahoo's .NS feeds carry loosely related stories: keep the ones that name it
+            got = [i for i in got if pats[t].search("%s %s" % (i["title"], i["summary"]))]
+        items += got
+    if india:
         names = dict(names or {})
         for kind, url, fname in NSE_FEEDS:
             try:
-                items += parse_nse_rss(fetcher.get(url, fname, ua=NSE_UA), kind, watch, names)
+                items += parse_nse_rss(fetch_nse(fetcher, url, fname), kind, watch, names)
             except NewsError as exc:
                 errors.append("NSE %ss: %s. Open %s in your browser to read them" % (kind, exc, url))
         if media:
@@ -634,6 +671,18 @@ def collect(fetcher, watch, state, sec=True, forms=("8-K",), count=10, errors=No
                 except NewsError as exc:
                     errors.append("SEC %s for %s: %s" % (form, t, exc))
     return items
+
+
+def fetch_nse(fetcher, url, fname, wait=5):
+    """An NSE feed, with one slower retry when NSE does not answer (it is often slow).
+    A refusal (an HTTP error) is never retried."""
+    try:
+        return fetcher.get(url, fname, ua=NSE_UA)
+    except NewsError as exc:
+        if fetcher.offline or not re.match(r"(no answer from|could not reach)", str(exc)):
+            raise
+    time.sleep(wait)
+    return fetcher.get(url, fname, ua=NSE_UA, timeout=60)
 
 
 def collect_media(fetcher, watch, errors, hours=48):

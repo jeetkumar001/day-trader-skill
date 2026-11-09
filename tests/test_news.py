@@ -307,5 +307,89 @@ class IndianMedia(unittest.TestCase):
         self.assertNotIn("Moneycontrol", out)
 
 
+class NewsCleanup(unittest.TestCase):
+    """India: the noise seen live on 2026-10-30 (BSE the exchange, quote pages, stray Yahoo items)."""
+
+    def setUp(self):
+        news.use_market("IN")
+        self.addCleanup(news.use_market, "US")
+
+    def match(self, watch, text):
+        return sorted(t for t, rx in news.mention_patterns(watch).items() if rx.search(text))
+
+    def test_bse_the_exchange_is_not_bse_the_stock(self):
+        watch = {"BSE": "BSE", "INFY": "Infosys"}
+        self.assertEqual(self.match(watch, "Trending Stocks on NSE and BSE"), [])
+        self.assertEqual(self.match(watch, "Infosys shares rise 3% on BSE"), ["INFY"])
+        self.assertEqual(self.match(watch, "BSE shares hit a record high"), ["BSE"])
+        self.assertEqual(self.match(watch, "BSE Ltd Q2 results: profit doubles"), ["BSE"])
+        self.assertEqual(self.match(watch, "Brokerages on BSE (NSE: BSE) after results"), ["BSE"])
+        self.assertIn("%22BSE%20Ltd%22", news.gnews_url("BSE", "BSE", 48))
+        self.assertEqual(self.match({"TRENT": "Trent"}, "Trent up 6%"), ["TRENT"])   # others unchanged
+
+    def test_us_market_is_unchanged(self):
+        news.use_market("US")
+        self.assertFalse(news.ambiguous("BSE", "BSE"))
+
+    def test_quote_pages_are_dropped(self):
+        for title in ("COFORGE Ltd.", "Trent Ltd.", "Ather Energy Ltd.",
+                      "Steamhouse India Share Price Today 30 Oct 2026: Live NSE/BSE Rates, Technical Analysis",
+                      "Most Visited Stocks Today | Trending Stocks on NSE and BSE",
+                      "F&O Quote - Live FNO BSE/NSE Quote, Nifty Quotes",
+                      "> Listing Details > > Listing Details of - BSE: , NSE:",
+                      "28th October, 2026 BSE Limited Corporate Relationship Department Scrip Code: 532538",
+                      "TCS Share Price Highlights: TCS Stock Price History",
+                      "TCS Share Price Live Updates: TCS Stock Update"):
+            self.assertTrue(news.is_quote_page(title), title)
+        for title in ("Trent shares zoom 7% after Q2 results, brokerages divided on outlook",
+                      "Laurus Labs share price at record high after Q2 results",
+                      "Noel Tata to retire as chairman of Trent on Nov 11; Bahram Vakil to take over"):
+            self.assertFalse(news.is_quote_page(title), title)
+
+    def test_yahoo_items_must_name_the_company(self):
+        rss = (b'<rss><channel>'
+               b'<item><title>Thoroughbred Championship Series Expands to Include Oaks Division</title>'
+               b'<link>https://finance.yahoo.com/a</link><description>Racing news.</description>'
+               b'<pubDate>Thu, 29 Oct 2026 20:01:00 GMT</pubDate></item>'
+               b'<item><title>TCS wins a deal with a European bank</title>'
+               b'<link>https://finance.yahoo.com/b</link><description></description>'
+               b'<pubDate>Thu, 29 Oct 2026 21:01:00 GMT</pubDate></item>'
+               b'</channel></rss>')
+
+        class One(object):
+            offline = None
+
+            def get(self, url, name, **kw):
+                if "yahoo" in url:
+                    return rss
+                raise news.NewsError("HTTP 403 for %s" % url)
+
+        items = news.collect(One(), {"TCS": "Tata Consultancy Services"}, {}, media=False, errors=[])
+        self.assertEqual([i["title"] for i in items], ["TCS wins a deal with a European bank"])
+
+    def test_nse_retries_once_on_no_answer_never_on_a_refusal(self):
+        calls = []
+
+        class Slow(object):
+            offline = None
+
+            def __init__(self, first):
+                self.first = first
+
+            def get(self, url, name, ua=None, timeout=30):
+                calls.append(timeout)
+                if len(calls) == 1:
+                    raise news.NewsError(self.first)
+                return b"<rss/>"
+
+        self.assertEqual(news.fetch_nse(Slow("no answer from nsearchives.nseindia.com (TimeoutError)"),
+                                        "u", "f", wait=0), b"<rss/>")
+        self.assertEqual(calls, [30, 60])
+        del calls[:]
+        with self.assertRaises(news.NewsError):
+            news.fetch_nse(Slow("HTTP 403 for u"), "u", "f", wait=0)
+        self.assertEqual(calls, [30])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -94,10 +94,16 @@ Indian business media come in too (`--no-media` skips them):
 A story is kept only when its headline or summary names the company (its
 name from `trader/universe-in.txt` without "Limited", or the symbol in
 capitals): being in a search result is not enough. The same story from two
-sources shows once. Business Standard refuses automated requests (HTTP 403)
+sources shows once. Quote, listing and "trending stocks" pages ("Trent Ltd.",
+"Share Price Today: Live NSE/BSE Rates") are dropped. A symbol that is also a
+market word (BSE, NSE, MCX, IDEA...) counts only as "BSE Ltd", "BSE shares" or
+"NSE: BSE", so a story about trading on the BSE is not a story about BSE Ltd.
+Yahoo's `.NS` headlines are kept only when they name the company too.
+Business Standard refuses automated requests (HTTP 403)
 and is not used. Media stories are reporting and opinion, often with brokers'
-buy or sell calls in them: quote the outlet, never repeat a call as advice. If NSE does not answer, the note gives the feed's address to open in a
-browser. Offline: `nse-announcements.xml` and `nse-board-meetings.xml`.
+buy or sell calls in them: quote the outlet, never repeat a call as advice.
+If NSE does not answer, it gets one slower retry (a refusal is never retried),
+then the note gives the feed's address to open in a browser. Offline: `nse-announcements.xml` and `nse-board-meetings.xml`.
 
 ## Steps
 

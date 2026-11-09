@@ -12,6 +12,7 @@ description: >-
   "where's my stop", "set my stop and target", "plan the exit", "when do I get
   out", "stop loss", "what's my R", "risk reward", or right after
   /trader-entry triggers, before /trader-timemachine.
+  Also runs on India's NSE (market IN): rupees, NSE tick sizes.
 argument-hint: "[--stop or-mid|or-low|price:X|pct:X|atr:K] [--target 2R|1R|price:X]"
 ---
 
@@ -69,6 +70,31 @@ A level setup has no opening range to lean on, so it needs a stop you name.
 - **Flat by.** 15:55 by default (or `flat_by` in the config). Out by then,
   win or lose, no overnight hold. On a 1:00 p.m. early close it moves up to
   12:55. An entry at or after the flat-by time is refused.
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN` on
+any command. US stays the default and its output is unchanged. In India mode:
+times are IST (UTC+5:30, no daylight saving), the session is 9:15 AM to
+3:30 PM, the holiday list is NSE's 2026 capital-market list (nseindia.com,
+read 2026-10-30; 2027 is not published yet, so the tool says the calendar is
+unknown for 2027 dates), prices print in rupees (₹), and tickers are plain
+NSE symbols (RELIANCE, M&M, BAJAJ-AUTO) that the tool turns into Yahoo's
+`.NS` form itself. The Diwali Muhurat session is announced by NSE circular
+each year and is not in the calendar.
+
+- Stops round DOWN and targets round to NSE's tick for the price (circular
+  NSE/CMTR/67133, from April 15 2025): ₹0.01 under ₹250, ₹0.05 to
+  ₹1,000, ₹0.10 to ₹5,000, ₹0.50 to ₹10,000, ₹1 to ₹20,000,
+  ₹5 above. NSE fixes a stock's tick each month from last month's close;
+  the tool uses the entry price, so near a band edge check your broker's tick.
+- `flat_by` defaults to 15:10 IST: brokers square off intraday (MIS)
+  positions around 15:15 to 15:20 on their own. The plan carries
+  `"market": "IN"`, `"currency": "INR"` and `"tick"`.
+
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

@@ -13,6 +13,7 @@ description: >-
   carlo", "backtest this setup", "how often does this hit the target", "is
   this a coin flip", or after /trader-exit writes a plan, before
   /trader-budget.
+  Also runs on India's NSE (market IN).
 argument-hint: "[path to plan.json, or TICKER]"
 ---
 
@@ -95,6 +96,28 @@ plain line, when there are fewer than 20 full sessions, when the entry bar is
 not in the data (wrong date, not closed yet, a future day), or when the plan
 does not make sense (a stop above a buy's entry, an entry off the 5-minute
 grid). A live in-progress bar is never used.
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN` on
+any command. US stays the default and its output is unchanged. In India mode:
+times are IST (UTC+5:30, no daylight saving), the session is 9:15 AM to
+3:30 PM, the holiday list is NSE's 2026 capital-market list (nseindia.com,
+read 2026-10-30; 2027 is not published yet, so the tool says the calendar is
+unknown for 2027 dates), prices print in rupees (₹), and tickers are plain
+NSE symbols (RELIANCE, M&M, BAJAJ-AUTO) that the tool turns into Yahoo's
+`.NS` form itself. The Diwali Muhurat session is announced by NSE circular
+each year and is not in the calendar.
+
+- An NSE replay ends at 3:15 PM (72 five-minute bars from 9:15), not 3:30:
+  brokers square off intraday positions around then, and Yahoo's NSE feed
+  leaves the 15:15 to 15:25 bars empty on most days, so a 3:30 session would
+  almost never be "full". BAJFINANCE on Oct 30 2026 had 58 full sessions in
+  60 days.
+
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

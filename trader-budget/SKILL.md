@@ -12,6 +12,7 @@ description: >-
   trade", "how much should I buy", "I have $5,000", "I only want to risk $50
   a trade", "set my rules", "keep 10% in cash", or after /trader-exit writes
   a plan.
+  Also India's NSE (market IN): rupee limits, intraday charges counted in the max loss.
 argument-hint: "[budget in dollars]"
 ---
 
@@ -139,6 +140,34 @@ With `"fractional": false` (the example config) it buys whole shares and
 needs prices (`--prices trader/prices.json`). These are plain buys with no stop: trader-risk blocks them while
 `require_stop` is true and counts each one against `max_trades_per_day`. Use
 a separate config (`--config`) for a long-term split.
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN`. US
+stays the default and its output is unchanged. In India mode:
+
+- Money limits are in rupees and use the `_inr` keys: `max_loss_per_trade_inr`
+  (default 1,000), `max_daily_loss_inr` (3,000), `max_order_inr` (80,000) and
+  `min_order_inr` (500). A config that sets only the `_usd` keys is refused,
+  never read as rupees. `budget` is in rupees. See
+  `config.in.example.json`.
+- **Charges count in the max loss.** An intraday (MIS) round trip pays
+  brokerage, STT, the NSE transaction charge, the SEBI fee, stamp duty and GST,
+  win or lose. The size is the most whole shares where shares x risk a share
+  plus those charges fits the max loss per trade. The default table (read
+  2026-10-30, from broker charge pages; NSE's circulars are the authority):
+  brokerage Rs 20 or 0.03% an order, whichever is lower; STT 0.025% of the
+  sell; NSE 0.00297% of turnover; SEBI Rs 10 a crore; stamp duty 0.003% of the
+  buy; GST 18% on brokerage, exchange and SEBI. Your broker's contract note
+  wins: override any of them with `"costs": {...}` in the config.
+- The order gets `"market": "IN"`, `"exchange": "NSE"`, `"product": "MIS"`.
+  trader-broker refuses it (it sends US orders only): once trader-risk passes
+  it, the user places it in their own broker's app.
+- Times are IST; the entry window defaults to 09:30 to 14:30 and flat by 15:10.
+
+Example, Oct 30 2026: BAJFINANCE, entry 940.50, stop 934.85, budget Rs 1,00,000:
+79 shares (the 75% position cap binds), Rs 74,299.50; max loss 79 x 5.65 =
+Rs 446.35 plus Rs 73.26 charges = Rs 519.61.
 
 ## Rules
 

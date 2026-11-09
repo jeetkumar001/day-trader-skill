@@ -102,10 +102,50 @@ NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET, from https://www.nyse.com/markets/hours-ca
     "2027-11-26": "day after Thanksgiving",
 }
 EARLY_MIN = 13 * 60
+# One row per market. utc_offset None = New York's DST rule; a number = a fixed offset in hours.
+MARKETS = {
+    "US": {"code": "US", "zone": "ET", "utc_offset": None, "suffix": "", "open_min": 9 * 60 + 30,
+           "close_min": 16 * 60, "session_bars": 78, "early_close": NYSE_EARLY_CLOSE},
+    # NSE trades 9:15 to 15:30, but replays end at 15:15: brokers square off intraday (MIS) positions
+    # around then, and Yahoo's NSE feed leaves the 15:15 to 15:25 bars empty on most days.
+    "IN": {"code": "IN", "zone": "IST", "utc_offset": 5.5, "suffix": ".NS", "open_min": 9 * 60 + 15,
+           "close_min": 15 * 60 + 15, "session_bars": 72, "early_close": {}},
+}
+MARKET = MARKETS["US"]
 
 
 class TMError(Exception):
     pass
+
+
+def use_market(code):
+    """Switch the session clock and symbols to one market: "US" (default) or "IN" (NSE)."""
+    global MARKET, OPEN_MIN, CLOSE_MIN, SESSION_BARS
+    key = (code or "US").strip().upper()
+    if key not in MARKETS:
+        raise TMError("market wants US or IN, not %r" % code)
+    MARKET = MARKETS[key]
+    OPEN_MIN, CLOSE_MIN, SESSION_BARS = MARKET["open_min"], MARKET["close_min"], MARKET["session_bars"]
+    return MARKET
+
+
+def market_from(path):
+    """The "market" in a JSON config, or None."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except ValueError:
+        return None
+    return doc.get("market") if isinstance(doc, dict) else None
+
+
+def yahoo_symbol(sym):
+    """BRK.B -> BRK-B (US), M&M -> M&M.NS (IN)."""
+    if MARKET["suffix"]:
+        return sym.upper() + MARKET["suffix"]
+    return sym.upper().replace(".", "-")
 
 
 # ---------------------------------------------------------------- time (copied from trader-alerts)
@@ -127,11 +167,19 @@ def eastern_offset(utc):
     return -4 if start <= naive < end else -5
 
 
+def local_offset(utc):
+    off = MARKET["utc_offset"]
+    return eastern_offset(utc) if off is None else off
+
+
 def to_eastern(utc):
-    return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
+    """UTC -> naive exchange time (New York for US, India for IN). The name is kept from v2."""
+    return utc.replace(tzinfo=None) + datetime.timedelta(hours=local_offset(utc))
 
 
 def eastern_to_utc(local):
+    if MARKET["utc_offset"] is not None:
+        return local - datetime.timedelta(hours=MARKET["utc_offset"])
     for off in (-4, -5):
         utc = local - datetime.timedelta(hours=off)
         if eastern_offset(utc) == off:
@@ -187,7 +235,7 @@ def clock24(minutes):
 
 def chart_url(sym, host="query2"):
     return "https://%s.finance.yahoo.com/v8/finance/chart/%s?range=60d&interval=5m" % (
-        host, urllib.parse.quote(sym.upper().replace(".", "-")))
+        host, urllib.parse.quote(yahoo_symbol(sym), safe="-.^"))
 
 
 def _sleep(seconds):
@@ -531,7 +579,7 @@ def load_plan(a, now_utc):
 def normalize_plan(raw, src="flags"):
     """A plan dict (trader/plan.json shape) -> the checked plan the time machine runs."""
     sym = str(raw.get("symbol") or "").strip().upper()
-    if not re.match(r"^[A-Z][A-Z0-9.\-]{0,9}$", sym):
+    if not re.match(r"^[A-Z0-9][A-Z0-9.&\-]{0,11}$", sym):
         raise TMError("the plan needs a ticker symbol, got %r" % raw.get("symbol"))
     side = str(raw.get("side") or "buy").lower()
     if side not in ("buy", "sell"):
@@ -686,7 +734,7 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     result = chart_result(text, sym)
     meta, bars, dropped = parse_bars(result, now_utc)
     msym = str(meta.get("symbol") or "").upper()
-    if msym and msym != sym.replace(".", "-"):
+    if msym and msym != yahoo_symbol(sym):
         raise TMError("the data is for %s but the plan is for %s" % (msym, sym))
     gran = meta.get("dataGranularity")
     if gran and gran != "5m":
@@ -694,7 +742,7 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
     if not bars:
         raise TMError("no complete 5-minute bars for %s in the data" % sym)
     k = plan["entry_bar"]
-    early = plan["date"] in NYSE_EARLY_CLOSE
+    early = plan["date"] in MARKET["early_close"]
     end_min = EARLY_MIN if early else CLOSE_MIN
     until_min = end_min if until is None else parse_clock(until, "--until")
     if (until_min - OPEN_MIN) % 5 or until_min > end_min:
@@ -740,7 +788,7 @@ def time_machine(text, plan, now_utc, replays=10000, seed=19, window=2, until=No
         "created_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": source,
         "data": {"symbol": msym or sym, "interval": "5m", "range": "60d",
-                 "last_bar": "%s %s ET" % (last_bar["date"], last_bar["start"]),
+                 "last_bar": "%s %s %s" % (last_bar["date"], last_bar["start"], MARKET["zone"]),
                  "dropped": dropped, "short_sessions_left_out": short},
         "plan": plan_out,
         "mc": mc,
@@ -930,7 +978,8 @@ def main(argv=None):
         p.add_argument("--window", type=int, default=2, help="draw from the same time of day +- this many bars")
         p.add_argument("--until", help="end each replay at this time (default 16:00, the close)")
         p.add_argument("--offline", metavar="FILE", help="a saved Yahoo chart JSON (.json or .json.gz), no network")
-        p.add_argument("--now", help='pretend it is this time ("2026-10-19 10:15" New York, or ISO with Z)')
+        p.add_argument("--now", help='pretend it is this time ("2026-10-19 10:15" exchange time, or ISO with Z)')
+        p.add_argument("--market", help="US (default) or IN (NSE); else \"market\" in trader/config.json")
 
     p = sub.add_parser("run", help="replay the plan: 10,000 simulated sessions plus the history")
     common(p)
@@ -946,6 +995,7 @@ def main(argv=None):
         ap.print_help()
         return 1
     try:
+        use_market(a.market or market_from("trader/config.json"))
         return {"run": cmd_run, "chart": cmd_chart}[a.cmd](a)
     except TMError as e:
         print("timemachine.py: %s" % e, file=sys.stderr)

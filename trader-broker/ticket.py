@@ -459,12 +459,24 @@ def _clock(a):
     return now, today
 
 
+def us_only(cfg, orders=()):
+    """This broker sends US orders (Alpaca, IBKR US) only. An NSE order must never reach a US
+    account: the same letters can be another company there (INFY is Infosys's NYSE ADR)."""
+    markets = {str(cfg.get("market") or "US").strip().upper()}
+    markets |= {str(o.get("market") or "US").strip().upper() for o in orders if isinstance(o, dict)}
+    other = sorted(m for m in markets if m != "US")
+    if other:
+        raise TicketError("trader-broker sends US orders only, and this is a %s order (\"market\": \"%s\"). "
+                          "Place it yourself in your own broker's app." % ("/".join(other), "/".join(other)))
+
+
 def _load(a):
     doc = read_json(a.orders, "orders file (run trader-budget, or ticket.py flatten, first)")
     orders = doc.get("orders", doc) if isinstance(doc, dict) else doc
     if not isinstance(orders, list) or not orders:
         raise TicketError("no orders in %s" % a.orders)
     cfg = read_json(a.config, "config", required=False) or {}
+    us_only(cfg, orders)
     risk = read_json(a.risk, "risk check", required=False)
     state = load_state(a.state)
     now, today = _clock(a)
@@ -585,6 +597,7 @@ def cmd_fill(a):
 
 def cmd_flatten(a):
     cfg = read_json(a.config, "config", required=False) or {}
+    us_only(cfg)
     sym = a.symbol.strip().upper()
     now, today = _clock(a)
     source = "the broker, get_open_position"

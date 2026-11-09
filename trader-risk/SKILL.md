@@ -102,6 +102,32 @@ Warnings do not block, but say them to the user: a LIVE account, a number
 sent as a number instead of a string, a stop that lives only in the plan and
 not at the broker, a price too old to use, an early close today.
 
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN`. US
+stays the default and its output is unchanged. In India mode:
+
+- The money limits are the `_inr` keys (see trader-budget); dollar-only
+  limits are refused.
+- **loss** counts the round-trip charges (brokerage, STT, exchange, SEBI,
+  stamp, GST: the same table and `"costs"` override as trader-budget) on top
+  of shares x risk a share, and so does the daily loss.
+- **window** is IST with NSE's 2026 holidays; defaults 09:30 to 14:30.
+- **asset** takes NSE symbols (RELIANCE, M&M, BAJAJ-AUTO, 20MICRONS).
+- **market**: an order whose `"market"` differs from the check's is blocked
+  (an NSE order checked as US, or the reverse).
+- **series** and **band**, from NSE's price band file `sec_list.csv`
+  (`https://nsearchives.nseindia.com/content/equities/sec_list.csv`, saved as
+  `trader/sec_list.csv`, or `--bands PATH`; refresh it each morning). An entry
+  in the BE or BZ series (trade for trade, delivery only) is blocked. With the
+  previous close in `trader/prices.json` (alerts.py quote --write), a target
+  above today's upper price band is blocked (it cannot fill today), and an
+  entry within 1% of the upper circuit gets a warning (trading can freeze
+  with only buyers; the stop may not fill when it reopens). A surveillance
+  remark (GSM, ASM) is a warning. "No Band" stocks (F&O) have dynamic bands
+  and are only noted. Without the file the check is off and the report says so.
+- pdt_guard is a US rule and is not applied.
+
 ## Steps
 
 1. If the price may have moved since the plan, refresh it first

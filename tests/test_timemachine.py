@@ -610,5 +610,23 @@ class Cli(unittest.TestCase):
         self.assertEqual(again, text)
 
 
+class India(unittest.TestCase):
+    """BAJFINANCE.NS: Yahoo v8, range=60d interval=5m, fetched 2026-10-30 11:40 IST. Yahoo leaves the
+    15:15 to 15:25 bars empty on most NSE days, so an NSE replay ends at 15:15 (72 bars)."""
+
+    def test_replay_on_nse_sessions(self):
+        tm.use_market("IN")
+        self.addCleanup(tm.use_market, "US")
+        with gzip.open(os.path.join(DIR, "BAJFINANCE-NS-60d5m.json.gz"), "rt", encoding="utf-8") as fh:
+            text = fh.read()
+        p = tm.normalize_plan({"symbol": "BAJFINANCE", "side": "buy", "date": "2026-10-30", "setup": "orb",
+                               "entry": 940.5, "entry_time": "9:35 AM", "stop": 934.85, "target": 951.8,
+                               "opening_range": {"high": 937.7, "low": 932.05, "minutes": 15}})
+        doc = tm.time_machine(text, p, tm.parse_now("2026-10-30 11:40"), replays=2000)
+        self.assertEqual(doc["mc"]["until"], "15:15")
+        self.assertEqual(doc["mc"]["pool_sessions"], 58)
+        self.assertTrue(doc["data"]["last_bar"].endswith("IST"))
+
+
 if __name__ == "__main__":
     unittest.main()

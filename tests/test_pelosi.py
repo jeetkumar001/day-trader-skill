@@ -196,5 +196,51 @@ class ParseReport(unittest.TestCase):
         self.assertIsNone(ptr.iso("13/45/2026"))
 
 
+DEALS = os.path.join(FIX, "trader-pelosi", "nse")
+NOFILES = ["--portfolio", "/nonexistent/p.json", "--watchlist", "/nonexistent/w.json", "--plan", "/nonexistent/x.json"]
+
+
+class NseDeals(unittest.TestCase):
+    """India: NSE bulk and block deals (bulk.csv and block.csv of Oct 29 2026)."""
+
+    def rows(self):
+        with open(os.path.join(DEALS, "bulk.csv"), encoding="utf-8") as fh:
+            return ptr.parse_deals(fh.read(), "bulk")
+
+    def test_bulk_rows(self):
+        rows = self.rows()
+        self.assertEqual(len(rows), 71)
+        first = rows[0]
+        self.assertEqual((first["date"], first["symbol"], first["side"], first["qty"], first["price"]),
+                         ("2026-10-29", "AEROFLEX", "BUY", 1315179, 553.64))
+        self.assertEqual(first["value_crore"], round(1315179 * 553.64 / 1e7, 2))
+        socgen = [r for r in rows if r["symbol"] == "BSOFT" and r["client"] == "SOCIETE GENERALE"]
+        self.assertFalse(socgen[0]["both_sides"])
+        qe = [r for r in rows if r["symbol"] == "BSOFT" and r["client"] == "QE SECURITIES LLP"]
+        self.assertTrue(all(r["both_sides"] for r in qe))
+
+    def test_a_quiet_day_has_no_rows(self):
+        with open(os.path.join(DEALS, "block.csv"), encoding="utf-8") as fh:
+            self.assertEqual(ptr.parse_deals(fh.read(), "block"), [])
+
+    def test_cli_flags_your_tickers_first(self):
+        code, out, _ = run(["deals", "--offline", DEALS, "--tickers", "BSOFT", "--limit", "3"] + NOFILES)
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+        self.assertTrue(all("BSOFT is on your list" in l for l in lines[:3]))
+        self.assertIn("not inside information", out)
+
+    def test_client_filter_and_new(self):
+        code, out, _ = run(["deals", "--offline", DEALS, "--client", "societe generale", "--json"] + NOFILES)
+        doc = json.loads(out)
+        self.assertEqual({d["client"] for d in doc["deals"]}, {"SOCIETE GENERALE"})
+        state = os.path.join(tempfile.mkdtemp(), "pelosi.json")
+        code, _, _ = run(["deals", "--offline", DEALS, "--new", "--state", state] + NOFILES)
+        self.assertEqual(code, 0)
+        code, out, _ = run(["deals", "--offline", DEALS, "--new", "--state", state] + NOFILES)
+        self.assertEqual(code, 1)
+        self.assertIn("No new deals", out)
+
+
 if __name__ == "__main__":
     unittest.main()

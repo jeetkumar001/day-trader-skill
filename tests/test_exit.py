@@ -286,5 +286,38 @@ class SkillDoc(unittest.TestCase):
             self.assertNotIn(never, low)
 
 
+class India(unittest.TestCase):
+    def setUp(self):
+        exitp.use_market("IN")
+        self.addCleanup(exitp.use_market, "US")
+
+    def test_nse_ticks_by_price_band(self):
+        t = exitp.tick_for
+        self.assertEqual([t(x) for x in (249.99, 250, 1000, 1000.05, 5000, 5000.5, 10000, 20000, 20001)],
+                         [Decimal(x) for x in ("0.01", "0.05", "0.05", "0.10", "0.10", "0.50", "0.50", "1.00",
+                                               "5.00")])
+
+    def test_stop_and_target_land_on_the_tick(self):
+        r = exitp.compute(940.50, "or_mid", None, "r", Decimal(2), 937.70, 932.05)
+        self.assertEqual((r["stop"], r["target"], r["risk"]), (Decimal("934.85"), Decimal("951.80"), Decimal("5.65")))
+        self.assertIn("rounded down to the \u20b90.05 tick", r["stop_detail"])
+        r = exitp.compute(152345, "pct", Decimal("0.5"), "r", Decimal(2))
+        self.assertEqual((r["stop"], r["target"]), (Decimal("151580.00"), Decimal("153875.00")))
+
+    def test_plan_flat_by_and_market(self):
+        code, out, _ = run(exitp, ["plan", "--market", "IN", "--symbol", "BAJFINANCE", "--entry", "940.50",
+                                   "--or-high", "937.70", "--or-low", "932.05", "--date", "2026-10-30",
+                                   "--now", "2026-10-30 09:36", "--json"])
+        self.assertEqual(code, 0)
+        plan = json.loads(out)
+        self.assertEqual((plan["flat_by"], plan["market"], plan["currency"], plan["tick"]), ("15:10", "IN", "INR", 0.05))
+        self.assertEqual(exitp.session(__import__("datetime").date(2026, 11, 24)), None)  # Guru Nanak Jayanti
+
+    def test_us_is_unchanged(self):
+        exitp.use_market("US")
+        self.assertEqual(exitp.tick_for(940.5), Decimal("0.01"))
+        self.assertEqual(exitp.money(1234.5), "$1,234.50")
+
+
 if __name__ == "__main__":
     unittest.main()

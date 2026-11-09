@@ -601,5 +601,31 @@ class SkillDoc(unittest.TestCase):
             self.assertNotIn(never, low)
 
 
+class India(unittest.TestCase):
+    """BAJFINANCE.NS, real Yahoo 5-minute bars of Fri Oct 30 2026 to 11:55 IST."""
+    NSE = os.path.join(FIX, "trader-scanner", "nse", "BAJFINANCE.json")
+
+    def setUp(self):
+        self.addCleanup(entry.use_market, "US")
+
+    def test_orb_in_ist_with_rupees(self):
+        code, out, _ = run(["check", "BAJFINANCE", "--market", "IN", "--offline", self.NSE,
+                            "--now", "2026-10-30 09:36"])
+        self.assertEqual(code, 0)
+        lines = out.splitlines()
+        self.assertTrue(lines[0].startswith("BAJFINANCE  Fri 2026-10-30 09:36 IST"), lines[0])
+        self.assertIn("Opening range 9:15-9:30: high \u20b9937.70, low \u20b9932.05 (3 of 3 bars).", lines)
+        self.assertIn("TRIGGERED 9:35 AM at \u20b9940.50", out)
+
+    def test_nse_holiday_and_ist_defaults(self):
+        entry.use_market("IN")
+        self.addCleanup(entry.use_market, "US")
+        self.assertEqual(entry.trading_day(datetime.date(2026, 11, 10)), (False, "NSE holiday: Diwali-Balipratipada"))
+        self.assertEqual(entry.next_open(datetime.date(2026, 11, 9)), "2026-11-11 09:15")
+        self.assertEqual(entry.read_config(None), {"no_entries_before": "09:30", "no_entries_after": "14:30"})
+        self.assertEqual(entry.yahoo_symbol("M&M"), "M&M.NS")
+        self.assertIn("/M%26M.NS?", entry.chart_path("M&M", "1d", "5m"))
+
+
 if __name__ == "__main__":
     unittest.main()

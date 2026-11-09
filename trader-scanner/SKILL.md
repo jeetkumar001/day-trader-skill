@@ -12,6 +12,7 @@ description: >-
   "what is breaking out", "opening range breakouts", "scan for bull flags",
   "oversold stocks", "pre-market scan", "build my watchlist", "what should I
   look at today", or at the start of a trading day before /trader-news.
+  Also India's NSE (market IN): the EQ-series list from nseindia.com.
 argument-hint: "[universe | daily | orb] [--at HH:MM]"
 ---
 
@@ -139,6 +140,33 @@ are in the calendar.
 - Partial results are said as partial: "Fetched 4,980 of 5,259 charts (279
   failed or had no data)". Never round a partial scan up to "the whole market".
 - NYSE holidays and early closes for 2026 and 2027 (nyse.com, read 2026-10-13).
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN` on
+any command. US stays the default and its output is unchanged. In India mode:
+times are IST (UTC+5:30, no daylight saving), the session is 9:15 AM to
+3:30 PM, the holiday list is NSE's 2026 capital-market list (nseindia.com,
+read 2026-10-30; 2027 is not published yet, so the tool says the calendar is
+unknown for 2027 dates), prices print in rupees (₹), and tickers are plain
+NSE symbols (RELIANCE, M&M, BAJAJ-AUTO) that the tool turns into Yahoo's
+`.NS` form itself. The Diwali Muhurat session is announced by NSE circular
+each year and is not in the calendar.
+
+- `scan.py universe --market IN` reads NSE's `EQUITY_L.csv` and keeps the EQ
+  series only (BE and BZ trade for trade: delivery only, no intraday). It
+  writes `trader/universe-in.txt`, so a US universe is never overwritten. If
+  nseindia.com refuses the download, save the file from a browser and pass
+  `--offline <file>`. On Oct 30 2026 it kept 2,357 of 2,620 rows.
+- Liquidity floors default to ₹20 and 500,000 shares (`--min-price`,
+  `--min-volume` change them). `orb` builds the range from the 9:15, 9:20 and
+  9:25 bars, and `no_entries_after` defaults to 14:30.
+- Yahoo's NSE 5-minute feed skips bars on thin stocks, so fewer charts are
+  usable than in the US (125 of the first 300 symbols on Oct 30 2026).
+
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

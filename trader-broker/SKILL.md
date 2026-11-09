@@ -14,6 +14,7 @@ description: >-
   says "place the order", "buy it", "execute", "send it to my broker",
   "close my position", "flatten", "get me out", "connect Alpaca", "set up
   paper trading", or after /trader-risk passes.
+  US orders only: refuses an NSE (market IN) order.
 argument-hint: "[order number]"
 ---
 
@@ -190,6 +191,15 @@ The user replies "yes". Claude records it, calls `place_stock_order`, and the
 card reads "Claude wants to use Place stock order" with that JSON and two
 buttons: Allow once, Deny. Allow once sends it to the paper account. The
 `why` and the plan stay in the file; they are never sent.
+
+## India (NSE)
+
+trader-broker sends US orders only (Alpaca, Interactive Brokers US). It
+refuses an order with `"market": "IN"`, and any order at all while
+`trader/config.json` says `"market": "IN"`: the same letters can be a
+different company in the US (INFY on the NYSE is an ADR, priced in dollars).
+For an NSE trade, the rest of the pack still sizes it and trader-risk checks
+it; the user places it in their own Indian broker's app.
 
 ## What it never does
 

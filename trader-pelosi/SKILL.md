@@ -11,6 +11,7 @@ description: >-
   Pelosi buying", "track Nancy Pelosi", "Congress trades", "politician stock
   trades", "did any congressman buy X", "alert me when Pelosi files", or
   "run the Pelosi skill".
+  For India: `deals` reads NSE bulk and block deals (who traded big).
 argument-hint: "[member name] [--read]"
 ---
 
@@ -131,6 +132,33 @@ does not click it or automate it. The route:
 4. They paste the table (or a screenshot, or the saved page) into the chat,
    and you write it up in the same shape as the House rows, with the report
    link, and the same 45-day caveat.
+
+## India: NSE bulk and block deals
+
+India has no STOCK Act for its politicians. The closest public record of who
+traded big is NSE's daily bulk and block deals, and `deals` reads them:
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/ptr.py" deals                       # today's bulk + block deals
+python3 "${CLAUDE_SKILL_DIR}/ptr.py" deals --tickers BSOFT --mine # only your stocks
+python3 "${CLAUDE_SKILL_DIR}/ptr.py" deals --client "SOCIETE GENERALE"
+python3 "${CLAUDE_SKILL_DIR}/ptr.py" deals --new                 # only deals not shown before
+```
+
+- Bulk deals (`content/equities/bulk.csv`): one client trading more than 0.5%
+  of a company's shares in a day. Block deals (`block.csv`): a single large
+  trade in NSE's separate block-deal window. Each file holds the latest trading
+  day only, posted after the close.
+- Rows show the date, kind, symbol, buy or sell, shares, price and value in
+  rupee crore, and the client. Your tickers (`--tickers`, the portfolio, the
+  scanner's watchlist and the plan) come first.
+- **Say who the client is.** Many are trading firms (QE Securities, AlphaGrep,
+  Microcurves, Jump Trading) that buy and sell the same day; the tool marks a
+  client on both sides of the same stock. A BUY by them is not a stake.
+- Insider (SEBI PIT) disclosures are not covered: they are on nseindia.com
+  under Corporate filings, Insider trading, to read in a browser.
+- If NSE does not answer, the note gives the file's address; save it from a
+  browser and pass `--offline DIR`.
 
 ## What it never does
 

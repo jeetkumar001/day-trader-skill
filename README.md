@@ -152,6 +152,27 @@ for the 60 days to October 19 2026, the 10:15 AM opening-range scan, Yahoo's
 TSLA headlines that morning, the House Clerk's 2026 index, real PTR text and
 real XBRL facts. They reproduce every number in the example above.
 
+## India (NSE)
+
+Every skill also runs on India's NSE except the order executor: put
+`"market": "IN"` in `trader/config.json` (or pass `--market IN`). Times are
+IST, the session is 9:15 AM to 3:30 PM with NSE's 2026 holidays, prices are in
+rupees, stops and targets land on NSE's tick for the price, and the flat-by
+time defaults to 3:10 PM, before brokers square off intraday positions.
+
+- The scanner reads NSE's EQ-series list; budget and risk use rupee limits
+  (the `_inr` keys, see `trader-budget/config.in.example.json`) and count
+  intraday charges (brokerage, STT, exchange, SEBI, stamp duty, GST) in the
+  loss at the stop. Risk also checks NSE's price bands and trade-for-trade
+  series.
+- News reads NSE's announcement and board-meeting feeds instead of SEC 8-Ks,
+  plus Moneycontrol, Mint, The Economic Times and The Hindu BusinessLine;
+  the analyst reads Yahoo's fundamentals in rupee crore by Indian fiscal
+  quarter; the Pelosi tracker's `deals` command reads NSE's bulk and block
+  deals.
+- trader-broker sends US orders only and refuses an NSE order: you place it in
+  your own broker's app.
+
 ## Fine print
 
 **Not financial advice.** This is software that reads public data and does

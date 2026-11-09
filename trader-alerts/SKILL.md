@@ -13,6 +13,7 @@ description: >-
   "watch my stop", "watch my trade", "remind me to close by 3:55", "is the
   market open", "when does the market open", "get me a price", or right
   after /trader-exit writes a plan.
+  Also runs on India's NSE (market IN, IST, rupees).
 argument-hint: "[ticker] [price]"
 ---
 
@@ -100,6 +101,28 @@ on these holidays, from nyse.com/markets/hours-calendars (read 2026-10-13):
 Daylight saving time is worked out in the tool, so it needs no time zone
 files and ignores the computer's own zone. For any other year it says the
 holiday list is unknown.
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN` on
+any command. US stays the default and its output is unchanged. In India mode:
+times are IST (UTC+5:30, no daylight saving), the session is 9:15 AM to
+3:30 PM, the holiday list is NSE's 2026 capital-market list (nseindia.com,
+read 2026-10-30; 2027 is not published yet, so the tool says the calendar is
+unknown for 2027 dates), prices print in rupees (₹), and tickers are plain
+NSE symbols (RELIANCE, M&M, BAJAJ-AUTO) that the tool turns into Yahoo's
+`.NS` form itself. The Diwali Muhurat session is announced by NSE circular
+each year and is not in the calendar.
+
+- `clock` answers for the NSE ("India 2026-11-09 18:00 (Monday): NSE closed,
+  after the close. Next open: 2026-11-11 09:15", Nov 10 being a holiday).
+- Quotes come from Yahoo only: the Stooq source is wired for US tickers.
+- `add --from-plan` sets the flat-by alert at the plan's flat_by (15:10 IST
+  by default).
+
+Every skill in the pack has an India mode except trader-broker, which sends US
+orders only and refuses an NSE order (`"market": "IN"`): after trader-risk
+passes it, the user places it in their own broker's app.
 
 ## Steps
 

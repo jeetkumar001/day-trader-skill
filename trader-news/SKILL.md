@@ -10,6 +10,8 @@ description: >-
   the user says "any news on TSLA", "why is this moving", "what's the news on
   my watchlist", "morning briefing", "pre-market news", "monitor the news",
   "did anything break", "check the 8-Ks", or after /trader-scanner finds setups.
+  Also India's NSE (market IN): NSE announcements and board meetings instead of SEC,
+  plus Moneycontrol, Mint, Economic Times and BusinessLine.
 argument-hint: "[tickers]"
 ---
 
@@ -58,6 +60,50 @@ python3 "${CLAUDE_SKILL_DIR}/news.py" --no-sec --json
   A move with no headline is worth saying out loud too.
 - **No predictions.** Report what was published and how far the price is from
   yesterday's close. Never say what the stock will do next.
+
+## India (NSE)
+
+Set `"market": "IN"` in `trader/config.json` once, or pass `--market IN`. In
+India mode SEC is off, and NSE's own public RSS feeds take its place, fetched
+once a check for every ticker:
+
+- **Announcements** (`content/RSS/Online_announcements.xml`): results, board
+  outcomes, orders won, resignations, fund raising, press releases. Mutual fund
+  NAV declarations are skipped.
+- **Board meetings** (`content/RSS/Board_Meetings.xml`): the date a company
+  will consider its results, the Indian earnings date.
+
+The feeds name the company, not the symbol, so an item is matched by the
+symbol in its filing link or by the company name in `trader/universe-in.txt`
+(trader-scanner `universe --market IN`). They hold only the last several
+hours, so check through the day. `!` marks an important subject: financial
+results, a board outcome, a resignation, a default, insolvency, a credit
+rating, an acquisition, a buyback or fund raising. Yahoo headlines use the
+`.NS` symbol and are often empty for NSE stocks. The move line and times are in
+IST.
+
+Indian business media come in too (`--no-media` skips them):
+
+| source | how |
+| --- | --- |
+| Mint | its own RSS: `livemint.com/rss/markets`, `/rss/companies` |
+| The Economic Times | its own RSS: markets (`1977021501.cms`), stocks (`2146842.cms`) |
+| The Hindu BusinessLine | its own RSS: `/markets/feeder/default.rss`, `/companies/feeder/default.rss` |
+| Moneycontrol (and Mint) | one Google News RSS search per ticker, `site:moneycontrol.com OR site:livemint.com`; Moneycontrol's own feeds stopped updating in April 2024. Links are Google News links that open the story |
+
+A story is kept only when its headline or summary names the company (its
+name from `trader/universe-in.txt` without "Limited", or the symbol in
+capitals): being in a search result is not enough. The same story from two
+sources shows once. Quote, listing and "trending stocks" pages ("Trent Ltd.",
+"Share Price Today: Live NSE/BSE Rates") are dropped. A symbol that is also a
+market word (BSE, NSE, MCX, IDEA...) counts only as "BSE Ltd", "BSE shares" or
+"NSE: BSE", so a story about trading on the BSE is not a story about BSE Ltd.
+Yahoo's `.NS` headlines are kept only when they name the company too.
+Business Standard refuses automated requests (HTTP 403)
+and is not used. Media stories are reporting and opinion, often with brokers'
+buy or sell calls in them: quote the outlet, never repeat a call as advice.
+If NSE does not answer, it gets one slower retry (a refusal is never retried),
+then the note gives the feed's address to open in a browser. Offline: `nse-announcements.xml` and `nse-board-meetings.xml`.
 
 ## Steps
 

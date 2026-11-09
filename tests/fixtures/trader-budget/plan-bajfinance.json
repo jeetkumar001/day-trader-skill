@@ -1,0 +1,23 @@
+{
+  "created_by": "trader-exit",
+  "market": "IN",
+  "currency": "INR",
+  "symbol": "BAJFINANCE",
+  "side": "buy",
+  "date": "2026-10-30",
+  "setup": "orb",
+  "entry": 940.50,
+  "entry_time": "9:35 AM",
+  "interval": "5m",
+  "opening_range": {"high": 937.70, "low": 932.05, "minutes": 15},
+  "stop": 934.85,
+  "stop_rule": "or_mid",
+  "stop_label": "opening-range midpoint",
+  "target": 951.80,
+  "target_r": 2.0,
+  "target_label": "2R (two times the risk)",
+  "risk_per_share": 5.65,
+  "reward_risk": 2.0,
+  "tick": 0.05,
+  "flat_by": "15:10"
+}

@@ -204,5 +204,192 @@ class Check(unittest.TestCase):
         self.assertEqual(state["last_check"], now.isoformat())
 
 
+NSE = os.path.join(DIR, "nse")
+
+
+class India(unittest.TestCase):
+    """"market": "IN": NSE's announcement and board-meeting feeds take the place of SEC."""
+
+    def setUp(self):
+        news.use_market("IN")
+        self.addCleanup(news.use_market, "US")
+        self.names = news.nse_names(os.path.join(NSE, "universe-in.txt"))
+
+    def feed(self, name, kind, watch):
+        with open(os.path.join(NSE, name), "rb") as fh:
+            return news.parse_nse_rss(fh.read(), kind, watch, dict(self.names))
+
+    def test_symbols_from_the_link_or_the_name(self):
+        items = self.feed("nse-announcements.xml", "announcement", {"VBL": None, "AJANTPHARM": None})
+        self.assertEqual({i["ticker"] for i in items}, {"VBL", "AJANTPHARM"})
+        # Ajanta's filing link says PRACHI_..., so it is matched by its name
+        aj = [i for i in items if i["ticker"] == "AJANTPHARM"][0]
+        self.assertIn("PRACHI_", aj["link"])
+        self.assertTrue(aj["important"])
+        self.assertEqual(aj["time"].isoformat(), "2026-10-30T07:32:20+00:00")   # 13:02:20 IST
+
+    def test_mutual_fund_navs_are_skipped(self):
+        items = self.feed("nse-announcements.xml", "announcement", {"X": None})
+        self.assertEqual(items, [])
+        self.assertNotIn("NAV", " ".join(i["summary"] for i in self.feed(
+            "nse-announcements.xml", "announcement", {"VBL": None})))
+
+    def test_board_meeting_carries_the_date(self):
+        items = self.feed("nse-board-meetings.xml", "board meeting", {"GRASIM": None})
+        self.assertTrue(items)
+        self.assertTrue(all("13-Nov-2026" in i["title"] for i in items))
+        self.assertTrue(any("earnings" in i["tags"] for i in news.tag(items, {"GRASIM": None})))
+
+    def test_cli_offline(self):
+        code, out, _ = run(["--market", "IN", "--tickers", "VBL", "GRASIM", "--offline", NSE,
+                            "--universe", os.path.join(NSE, "universe-in.txt"), "--no-moves",
+                            "--now", "2026-10-30T09:00:00Z", "--dry-run", "--state",
+                            os.path.join(tempfile.mkdtemp(), "news.json")])
+        self.assertEqual(code, 0)
+        self.assertIn("IST", out)
+        self.assertIn("Grasim Industries Limited: board meeting (Meeting Date: 13-Nov-2026)", out)
+        self.assertNotIn("SEC", out)
+
+    def test_yahoo_symbol(self):
+        self.assertEqual(news.yahoo_symbol("M&M"), "M%26M.NS")
+        self.assertIn("region=IN", news.MARKET["yahoo"])
+
+
+class IndianMedia(unittest.TestCase):
+    """India: Mint, Economic Times and BusinessLine feeds, Moneycontrol and Mint via Google News."""
+
+    def setUp(self):
+        news.use_market("IN")
+        self.addCleanup(news.use_market, "US")
+        self.watch = {"RELIANCE": "Reliance Industries", "VBL": "Varun Beverages"}
+
+    def raw(self, name):
+        with open(os.path.join(NSE, name), "rb") as fh:
+            return fh.read()
+
+    def test_short_names(self):
+        self.assertEqual(news.short_name("Bajaj Finance Limited"), "Bajaj Finance")
+        self.assertEqual(news.short_name("SKIPPER LIMITED"), "SKIPPER")
+        self.assertEqual(news.short_name("Thomas Cook  (India)  Ltd."), "Thomas Cook (India)")
+
+    def test_paper_feed_keeps_only_named_companies(self):
+        items = news.parse_media_rss(self.raw("mint-markets.xml"), self.watch, source="Mint")
+        self.assertEqual(sorted(i["ticker"] for i in items), ["RELIANCE", "VBL"])   # gold is dropped
+        vbl = [i for i in items if i["ticker"] == "VBL"][0]
+        self.assertIn("Stocks to watch", vbl["title"])                             # matched by the symbol
+        et = news.parse_media_rss(self.raw("et-stocks.xml"), self.watch, source="Economic Times")
+        self.assertEqual(len(et), 1)
+        self.assertNotIn("<img", et[0]["summary"])
+
+    def test_google_news_search(self):
+        items = news.parse_media_rss(self.raw("gnews-RELIANCE.xml"), self.watch, ticker="RELIANCE")
+        self.assertEqual([(i["source"], i["title"]) for i in items], [
+            ("Moneycontrol", "Reliance Industries Q2 results: Profit may top Rs 21,000 crore"),
+            ("Mint", "Reliance Industries Q2 results today: what to watch")])
+        self.assertEqual(items[0]["time"].isoformat(), "2026-10-30T04:06:00+00:00")
+        self.assertIn("site%3Amoneycontrol.com", news.gnews_url("Reliance Industries", "RELIANCE", 48))
+        self.assertIn("when%3A2d", news.gnews_url("Reliance Industries", "RELIANCE", 48))
+
+    def test_cli_offline_all_sources(self):
+        code, out, _ = run(["--market", "IN", "--tickers", "RELIANCE", "--offline", NSE,
+                            "--universe", os.path.join(NSE, "universe-in.txt"), "--no-moves",
+                            "--now", "2026-10-30T09:00:00Z", "--dry-run", "--state",
+                            os.path.join(tempfile.mkdtemp(), "news.json")])
+        self.assertEqual(code, 0)
+        for src in ("Moneycontrol", "Mint", "Economic Times"):
+            self.assertIn(src, out)
+        # Mint's own feed and the Google News copy of the same story show once
+        self.assertEqual(out.count("Reliance Industries Q2 results today: what to watch"), 1)
+        code, out, _ = run(["--market", "IN", "--tickers", "RELIANCE", "--offline", NSE, "--no-media",
+                            "--universe", os.path.join(NSE, "universe-in.txt"), "--no-moves",
+                            "--now", "2026-10-30T09:00:00Z", "--dry-run", "--state",
+                            os.path.join(tempfile.mkdtemp(), "news.json")])
+        self.assertNotIn("Moneycontrol", out)
+
+
+class NewsCleanup(unittest.TestCase):
+    """India: the noise seen live on 2026-10-30 (BSE the exchange, quote pages, stray Yahoo items)."""
+
+    def setUp(self):
+        news.use_market("IN")
+        self.addCleanup(news.use_market, "US")
+
+    def match(self, watch, text):
+        return sorted(t for t, rx in news.mention_patterns(watch).items() if rx.search(text))
+
+    def test_bse_the_exchange_is_not_bse_the_stock(self):
+        watch = {"BSE": "BSE", "INFY": "Infosys"}
+        self.assertEqual(self.match(watch, "Trending Stocks on NSE and BSE"), [])
+        self.assertEqual(self.match(watch, "Infosys shares rise 3% on BSE"), ["INFY"])
+        self.assertEqual(self.match(watch, "BSE shares hit a record high"), ["BSE"])
+        self.assertEqual(self.match(watch, "BSE Ltd Q2 results: profit doubles"), ["BSE"])
+        self.assertEqual(self.match(watch, "Brokerages on BSE (NSE: BSE) after results"), ["BSE"])
+        self.assertIn("%22BSE%20Ltd%22", news.gnews_url("BSE", "BSE", 48))
+        self.assertEqual(self.match({"TRENT": "Trent"}, "Trent up 6%"), ["TRENT"])   # others unchanged
+
+    def test_us_market_is_unchanged(self):
+        news.use_market("US")
+        self.assertFalse(news.ambiguous("BSE", "BSE"))
+
+    def test_quote_pages_are_dropped(self):
+        for title in ("COFORGE Ltd.", "Trent Ltd.", "Ather Energy Ltd.",
+                      "Steamhouse India Share Price Today 30 Oct 2026: Live NSE/BSE Rates, Technical Analysis",
+                      "Most Visited Stocks Today | Trending Stocks on NSE and BSE",
+                      "F&O Quote - Live FNO BSE/NSE Quote, Nifty Quotes",
+                      "> Listing Details > > Listing Details of - BSE: , NSE:",
+                      "28th October, 2026 BSE Limited Corporate Relationship Department Scrip Code: 532538",
+                      "TCS Share Price Highlights: TCS Stock Price History",
+                      "TCS Share Price Live Updates: TCS Stock Update"):
+            self.assertTrue(news.is_quote_page(title), title)
+        for title in ("Trent shares zoom 7% after Q2 results, brokerages divided on outlook",
+                      "Laurus Labs share price at record high after Q2 results",
+                      "Noel Tata to retire as chairman of Trent on Nov 11; Bahram Vakil to take over"):
+            self.assertFalse(news.is_quote_page(title), title)
+
+    def test_yahoo_items_must_name_the_company(self):
+        rss = (b'<rss><channel>'
+               b'<item><title>Thoroughbred Championship Series Expands to Include Oaks Division</title>'
+               b'<link>https://finance.yahoo.com/a</link><description>Racing news.</description>'
+               b'<pubDate>Thu, 29 Oct 2026 20:01:00 GMT</pubDate></item>'
+               b'<item><title>TCS wins a deal with a European bank</title>'
+               b'<link>https://finance.yahoo.com/b</link><description></description>'
+               b'<pubDate>Thu, 29 Oct 2026 21:01:00 GMT</pubDate></item>'
+               b'</channel></rss>')
+
+        class One(object):
+            offline = None
+
+            def get(self, url, name, **kw):
+                if "yahoo" in url:
+                    return rss
+                raise news.NewsError("HTTP 403 for %s" % url)
+
+        items = news.collect(One(), {"TCS": "Tata Consultancy Services"}, {}, media=False, errors=[])
+        self.assertEqual([i["title"] for i in items], ["TCS wins a deal with a European bank"])
+
+    def test_nse_retries_once_on_no_answer_never_on_a_refusal(self):
+        calls = []
+
+        class Slow(object):
+            offline = None
+
+            def __init__(self, first):
+                self.first = first
+
+            def get(self, url, name, ua=None, timeout=30):
+                calls.append(timeout)
+                if len(calls) == 1:
+                    raise news.NewsError(self.first)
+                return b"<rss/>"
+
+        self.assertEqual(news.fetch_nse(Slow("no answer from nsearchives.nseindia.com (TimeoutError)"),
+                                        "u", "f", wait=0), b"<rss/>")
+        self.assertEqual(calls, [30, 60])
+        del calls[:]
+        with self.assertRaises(news.NewsError):
+            news.fetch_nse(Slow("HTTP 403 for u"), "u", "f", wait=0)
+        self.assertEqual(calls, [30])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -519,5 +519,90 @@ class Cli(unittest.TestCase):
         self.assertIn("--today wants", err.getvalue())
 
 
+BANDS = os.path.join(FIX, "trader-risk", "nse", "sec_list.csv")
+IN_NOW = "2026-10-30 09:40"
+
+
+def in_order(sym="BAJFINANCE", qty=79, entry=940.50, stop=934.85, target=951.80):
+    o = bracket(sym, qty, entry, stop, target)
+    o.update({"market": "IN", "exchange": "NSE", "product": "MIS"})
+    return o
+
+
+class India(unittest.TestCase):
+    """"market": "IN": rupee limits, NSE charges in the max loss, IST window, price bands."""
+
+    def setUp(self):
+        check.use_market("IN")
+        self.addCleanup(check.use_market, "US")
+        self.bands = check.load_bands(BANDS)
+
+    def run_check(self, orders, now=IN_NOW, **kw):
+        cfg_ = {"budget": 100000}
+        cfg_.update(kw.pop("cfg", {}))
+        return check.check(orders, cfg_, now=check.parse_now(now), bands=kw.pop("bands", self.bands), **kw)
+
+    def test_the_budget_order_passes_with_charges(self):
+        res = self.run_check([in_order()])
+        self.assertEqual(verdicts(res), ["PASS"])
+        r = res["results"][0]
+        self.assertEqual(r["max_loss"], round(79 * 5.65 + 73.26, 2))
+        self.assertEqual(res["market"], "IN")
+        self.assertTrue(any("dynamic bands" in x for x in r["info"]))
+
+    def test_charges_count_against_the_limit(self):
+        # 88 x 5.65 = 497.20 fits a Rs 500 limit on price alone; the charges push it over
+        res = self.run_check([in_order(qty=88)], cfg={"max_loss_per_trade_inr": 500, "max_position_pct": 100,
+                                                       "max_order_inr": 200000})
+        self.assertEqual(verdicts(res), ["BLOCK"])
+        self.assertIn("charges", (reasons(res)))
+
+    def test_ist_window_and_holiday(self):
+        self.assertIn("after 14:30 IST", (reasons(self.run_check([in_order()], now="2026-10-30 14:45"))))
+        self.assertIn("before 09:30 IST", (reasons(self.run_check([in_order()], now="2026-10-30 09:20"))))
+        self.assertIn("NSE holiday", (reasons(self.run_check([in_order()], now="2026-11-10 10:00"))))
+
+    def test_nse_symbols(self):
+        for sym in ("M&M", "BAJAJ-AUTO"):
+            res = self.run_check([in_order(sym, qty=10, entry=300, stop=297, target=306)])
+            self.assertFalse("asset" in reasons(res), reasons(res))
+
+    def test_trade_for_trade_series_is_blocked(self):
+        res = self.run_check([in_order("ABAN", qty=100, entry=30, stop=29.5, target=31)])
+        self.assertIn("delivery only", (reasons(res)))
+        self.assertTrue("GSM" in warnings(self.run_check(
+            [in_order("AGSTRA", qty=100, entry=30, stop=29.5, target=31)])))
+
+    def test_target_above_the_upper_band_is_blocked(self):
+        # 21STCENMGM has a 5% band: previous close 50 -> 47.50 to 52.50
+        o = in_order("21STCENMGM", qty=100, entry=52.0, stop=51.5, target=53.0)
+        res = self.run_check([o], prev_close={"21STCENMGM": 50})
+        self.assertIn("upper price band 52.50", (reasons(res)))
+        self.assertTrue("upper circuit" in warnings(res))
+        ok = self.run_check([in_order("21STCENMGM", qty=100, entry=50.5, stop=50.0, target=51.5)],
+                            prev_close={"21STCENMGM": 50})
+        self.assertEqual(verdicts(ok), ["PASS"])
+        no_pc = self.run_check([o])
+        self.assertTrue("no previous close" in warnings(no_pc))
+
+    def test_no_band_file_is_a_warning(self):
+        res = self.run_check([in_order()], bands=None)
+        self.assertTrue(any("sec_list.csv" in w for w in res["warnings"]))
+
+    def test_dollar_limits_and_market_mismatch(self):
+        with self.assertRaises(check.RiskError):
+            self.run_check([in_order()], cfg={"max_loss_per_trade_usd": 50})
+        check.use_market("US")
+        res = check.check([in_order()], cfg(), now=check.parse_now("2026-10-30 10:40"))
+        self.assertIn("run it with --market IN", (reasons(res)))
+
+    def test_broker_refuses_nse_orders(self):
+        with self.assertRaises(ticket.TicketError):
+            ticket.us_only({"market": "IN"})
+        with self.assertRaises(ticket.TicketError):
+            ticket.us_only({}, [in_order()])
+        ticket.us_only({}, [tsla()])
+
+
 if __name__ == "__main__":
     unittest.main()
